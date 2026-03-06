@@ -16,6 +16,7 @@ from .stats import DailyStats
 from .conversation import ConversationContext
 from .refund import RefundRecord
 from .learning import LearningRecord
+from .pdd_order import PddOrder
 
 __all__ = [
     'db', 'init_db',
@@ -29,4 +30,5 @@ __all__ = [
     'ConversationContext',
     'RefundRecord',
     'LearningRecord',
+    'PddOrder',
 ]

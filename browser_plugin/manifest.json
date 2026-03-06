@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "爱客服 - 拼多多AI助手",
+  "version": "1.0.0",
+  "description": "拼多多商家后台AI客服助手，自动抓取消息并回复",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "https://*.pinduoduo.com/*",
+    "http://localhost:5000/*",
+    "http://127.0.0.1:5000/*",
+    "http://localhost:6000/*",
+    "http://127.0.0.1:6000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mms.pinduoduo.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "爱客服AI助手"
+  }
+}

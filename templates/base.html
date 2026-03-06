@@ -188,6 +188,12 @@
                     <i class="bi bi-book"></i>知识库
                 </a>
             </li>
+            <li class="nav-item ms-3">
+                <a class="nav-link {% if request.endpoint == 'knowledge.generate' %}active{% endif %}"
+                   href="{{ url_for('knowledge.generate') }}" style="font-size:0.85rem;">
+                    <i class="bi bi-robot"></i>AI批量生成
+                </a>
+            </li>
             
             <li class="nav-item">
                 <a class="nav-link {% if request.blueprint == 'blacklist' %}active{% endif %}"
@@ -203,6 +209,12 @@
                 <a class="nav-link {% if request.blueprint == 'stats' %}active{% endif %}"
                    href="{{ url_for('stats.index') }}">
                     <i class="bi bi-bar-chart-line"></i>统计报表
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.blueprint == 'pdd_orders' %}active{% endif %}"
+                   href="{{ url_for('pdd_orders.index') }}">
+                    <i class="bi bi-bag-check text-danger"></i>拼多多订单
                 </a>
             </li>
 

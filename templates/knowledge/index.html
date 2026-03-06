@@ -32,10 +32,14 @@
                     <option value="payment" {% if selected_category == 'payment' %}selected{% endif %}>付款问题</option>
                 </select>
             </div>
-            <div class="col-auto ms-auto">
+            <div class="col-auto ms-auto d-flex gap-2">
+                <a href="{{ url_for('knowledge.generate') }}"
+                   class="btn btn-outline-primary btn-sm">
+                    <i class="bi bi-robot"></i> AI批量生成
+                </a>
                 <a href="{{ url_for('knowledge.add') }}{% if selected_industry %}?industry_id={{ selected_industry }}{% endif %}"
                    class="btn btn-primary btn-sm">
-                    <i class="bi bi-plus-circle"></i> 添加知识库条目
+                    <i class="bi bi-plus-circle"></i> 手动添加
                 </a>
             </div>
         </form>

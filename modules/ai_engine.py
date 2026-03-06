@@ -132,7 +132,8 @@ class AIEngine:
 
         # 6. 退款意图 → 直接走退款决策流程（doubao-pro）
         if intent == 'refund' and config.DOUBAO_API_KEY:
-            order_info = f'订单号：{order_id}' if order_id else '未提供订单号'
+            # 优先从PddOrder表查询真实订单数据，提升退款决策质量
+            order_info = self._get_order_info_string(shop_id, order_id)
             refund_result = self.doubao_ai.handle_refund_decision(
                 message, order_info, shop.get_effective_prompt()
             )
@@ -335,6 +336,29 @@ class AIEngine:
         msg.status = 'processed'
         msg.processed_at = get_beijing_time()
         db.session.commit()
+
+    def _get_order_info_string(self, shop_id: int, order_id: str) -> str:
+        """
+        获取订单信息字符串，供AI退款决策使用
+        功能：优先从PddOrder表查询真实订单数据；如无数据则降级为简单字符串
+        参数：
+            shop_id - 店铺ID
+            order_id - 订单号
+        返回：订单信息自然语言字符串
+        """
+        if not order_id:
+            return '未提供订单号'
+        try:
+            from models.pdd_order import PddOrder
+            order = PddOrder.query.filter_by(
+                shop_id=shop_id, order_id=order_id
+            ).first()
+            if order:
+                return order.to_info_string()
+        except Exception:
+            pass
+        # 降级：没有真实数据时返回简单字符串
+        return f'订单号：{order_id}'
 
     def _make_result(self, reply: str, process_by: str) -> dict:
         """

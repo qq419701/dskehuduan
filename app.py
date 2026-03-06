@@ -69,6 +69,7 @@ def create_app():
     from routes.learning import learning_bp
     from routes.refund import refund_bp
     from routes.risk import risk_bp
+    from routes.pdd_orders import pdd_orders_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -83,6 +84,7 @@ def create_app():
     app.register_blueprint(learning_bp, url_prefix='/learning')
     app.register_blueprint(refund_bp, url_prefix='/refund')
     app.register_blueprint(risk_bp, url_prefix='/risk')
+    app.register_blueprint(pdd_orders_bp, url_prefix='/pdd-orders')
 
     # ---- 启动定时任务调度器 ----
     from modules.scheduler import TaskScheduler
