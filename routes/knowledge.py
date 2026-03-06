@@ -164,3 +164,133 @@ def delete(item_id):
 
     flash('知识库条目已删除', 'success')
     return redirect(url_for('knowledge.index', industry_id=industry_id))
+
+
+@knowledge_bp.route('/generate', methods=['GET'])
+@login_required
+def generate():
+    """
+    AI批量生成知识库页面
+    功能：根据行业和主题，调用豆包AI批量生成问答对，人工审核后批量入库
+    """
+    if current_user.is_admin():
+        industries = Industry.query.filter_by(is_active=True).all()
+    else:
+        industries = Industry.query.filter_by(
+            id=current_user.industry_id, is_active=True
+        ).all()
+
+    return render_template('knowledge/generate.html', industries=industries)
+
+
+@knowledge_bp.route('/api/generate', methods=['POST'])
+@login_required
+def api_generate():
+    """
+    调用AI批量生成知识库条目接口
+    功能：通过doubao-lite生成问答对，返回JSON供前端展示和编辑
+    请求格式（JSON）：
+    {
+        "industry_id": 1,
+        "topic": "换号问题",
+        "count": 10
+    }
+    返回：{'success': True, 'items': [{'question':..., 'answer':..., 'category':...}]}
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        data = request.get_json() or {}
+        industry_id = int(data.get('industry_id') or 0)
+        topic = (data.get('topic') or '').strip()
+        count = min(int(data.get('count') or 10), 30)  # 最多一次生成30条
+
+        if not industry_id or not topic:
+            return jsonify({'success': False, 'message': '行业和主题为必填项'})
+
+        if not current_user.can_manage_industry(industry_id):
+            return jsonify({'success': False, 'message': '无权限操作该行业'})
+
+        industry = Industry.query.get(industry_id)
+        if not industry:
+            return jsonify({'success': False, 'message': '行业不存在'})
+
+        from modules.doubao_ai import DoubaoAI
+        ai = DoubaoAI()
+        result = ai.generate_knowledge(
+            industry_name=industry.name,
+            topic=topic,
+            count=count,
+        )
+
+        return jsonify({
+            'success': result.get('success', False),
+            'items': result.get('items', []),
+            'tokens': result.get('tokens', 0),
+            'error': result.get('error', ''),
+        })
+
+    except Exception as e:
+        logger.error(f"[知识库] AI生成异常: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@knowledge_bp.route('/api/batch-save', methods=['POST'])
+@login_required
+def api_batch_save():
+    """
+    批量保存AI生成的知识库条目
+    功能：前端审核并勾选后，一次性入库多条知识
+    请求格式（JSON）：
+    {
+        "industry_id": 1,
+        "items": [
+            {"question": "...", "answer": "...", "category": "general"},
+            ...
+        ]
+    }
+    返回：{'success': True, 'saved': 保存数量}
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        data = request.get_json() or {}
+        industry_id = int(data.get('industry_id') or 0)
+        items = data.get('items') or []
+
+        if not industry_id:
+            return jsonify({'success': False, 'message': '缺少industry_id'})
+
+        if not current_user.can_manage_industry(industry_id):
+            return jsonify({'success': False, 'message': '无权限操作该行业'})
+
+        if not items:
+            return jsonify({'success': False, 'message': '没有可保存的条目'})
+
+        saved_count = 0
+        now = get_beijing_time()
+        for item in items:
+            question = (item.get('question') or '').strip()
+            answer = (item.get('answer') or '').strip()
+            if not question or not answer:
+                continue
+            kb = KnowledgeBase(
+                industry_id=industry_id,
+                question=question,
+                answer=answer,
+                keywords=item.get('keywords', ''),
+                category=item.get('category', 'general'),
+                priority=0,
+                is_active=True,
+                created_at=now,
+            )
+            db.session.add(kb)
+            saved_count += 1
+
+        db.session.commit()
+        return jsonify({'success': True, 'saved': saved_count})
+
+    except Exception as e:
+        logger.error(f"[知识库] 批量保存异常: {e}", exc_info=True)
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)})

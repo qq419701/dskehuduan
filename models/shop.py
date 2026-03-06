@@ -70,6 +70,9 @@ class Shop(db.Model):
     # 是否启用
     is_active = db.Column(db.Boolean, default=True)
 
+    # 插件认证Token（用于Chrome插件向本地服务推送消息时鉴权）
+    shop_token = db.Column(db.String(64), unique=True, index=True)
+
     # 创建时间（北京时间）
     created_at = db.Column(db.DateTime, default=get_beijing_time)
 
@@ -79,6 +82,16 @@ class Shop(db.Model):
     # 关联消息记录
     messages = db.relationship('Message', backref='shop', lazy='dynamic',
                                foreign_keys='Message.shop_id')
+
+    def generate_token(self) -> str:
+        """
+        生成店铺Token（用于Chrome插件认证）
+        功能：生成64位随机十六进制字符串，保证唯一性
+        返回：生成的Token字符串
+        """
+        import secrets
+        self.shop_token = secrets.token_hex(32)
+        return self.shop_token
 
     def get_effective_prompt(self):
         """
