@@ -66,6 +66,9 @@ def create_app():
     from routes.blacklist import blacklist_bp
     from routes.stats import stats_bp
     from routes.api import api_bp
+    from routes.learning import learning_bp
+    from routes.refund import refund_bp
+    from routes.risk import risk_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -77,6 +80,9 @@ def create_app():
     app.register_blueprint(blacklist_bp, url_prefix='/blacklist')
     app.register_blueprint(stats_bp, url_prefix='/stats')
     app.register_blueprint(api_bp, url_prefix='/api')
+    app.register_blueprint(learning_bp, url_prefix='/learning')
+    app.register_blueprint(refund_bp, url_prefix='/refund')
+    app.register_blueprint(risk_bp, url_prefix='/risk')
 
     # ---- 启动定时任务调度器 ----
     from modules.scheduler import TaskScheduler

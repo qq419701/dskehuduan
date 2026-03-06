@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 API接口路由模块
-功能说明：提供Webhook回调接口，接收平台消息并调用AI引擎处理
-支持拼多多等平台的消息推送
+功能说明：提供Webhook回调和AI助手接口，接收平台消息并调用AI引擎处理
+支持拼多多等平台的消息推送，以及知识库AI助手功能
 """
 
 import json
 import logging
 from flask import Blueprint, request, jsonify
+from flask_login import login_required, current_user
 from models import Shop, Industry
 from modules.ai_engine import AIEngine
 
@@ -51,7 +52,8 @@ def webhook_message():
         "success": true,
         "reply": "AI回复内容",
         "process_by": "处理方式",
-        "needs_human": false
+        "needs_human": false,
+        "intent": "意图类型"
     }
     """
     try:
@@ -94,7 +96,7 @@ def webhook_message():
         )
 
         logger.info(f"[API] shop={shop_id} buyer={buyer_id} process_by={result.get('process_by')} "
-                    f"emotion={result.get('emotion_level')}")
+                    f"emotion={result.get('emotion_level')} intent={result.get('intent')}")
 
         return jsonify({
             'success': True,
@@ -102,6 +104,7 @@ def webhook_message():
             'process_by': result.get('process_by', ''),
             'needs_human': result.get('needs_human', False),
             'emotion_level': result.get('emotion_level', 0),
+            'intent': result.get('intent', 'other'),
             'action': result.get('action', ''),
         })
 
@@ -146,11 +149,60 @@ def test_message():
             'reply': result.get('reply', ''),
             'process_by': result.get('process_by', ''),
             'emotion_level': result.get('emotion_level', 0),
+            'intent': result.get('intent', 'other'),
         })
 
     except Exception as e:
         logger.error(f"[API] 测试消息异常: {e}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@api_bp.route('/ai-assistant/chat', methods=['POST'])
+@login_required
+def ai_assistant_chat():
+    """
+    AI知识库助手对话接口（知识库页面的AI小窗口）
+    功能：运营人员主动问AI，获取行业知识建议和话术模板
+    使用doubao-lite模型（成本低，速度快）
+    请求格式（JSON）：
+    {
+        "question": "请问游戏租号行业可能出现什么问题？",
+        "industry_id": 1（可选，用于获取行业背景）
+    }
+    返回：{'success': True, 'reply': 'AI回答'}
+    """
+    try:
+        data = request.get_json() or {}
+        question = data.get('question', '').strip()
+        industry_id = data.get('industry_id', type(0)) or data.get('industry_id')
+
+        if not question:
+            return jsonify({'success': False, 'message': '问题不能为空'})
+
+        # 获取行业背景信息（用于增强AI理解）
+        context_prompt = ''
+        if industry_id:
+            industry = Industry.query.get(industry_id)
+            if industry:
+                context_prompt = (
+                    f"当前行业：{industry.name}\n"
+                    f"行业描述：{industry.description or ''}\n"
+                    f"AI系统提示词：{industry.ai_system_prompt or ''}"
+                )
+
+        from modules.doubao_ai import DoubaoAI
+        ai = DoubaoAI()
+        result = ai.ask_assistant(question, context_prompt)
+
+        return jsonify({
+            'success': result.get('success', False),
+            'reply': result.get('reply', ''),
+            'tokens': result.get('tokens', 0),
+        })
+
+    except Exception as e:
+        logger.error(f"[API] AI助手异常: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)})
 
 
 @api_bp.route('/health', methods=['GET'])
@@ -169,4 +221,7 @@ def health():
         'version': config.SYSTEM_VERSION,
         'time': get_beijing_time().strftime('%Y-%m-%d %H:%M:%S'),
         'timezone': 'Asia/Shanghai (北京时间)',
+        'db': 'MySQL' if 'mysql' in config.SQLALCHEMY_DATABASE_URI else 'SQLite',
+        'ai_configured': bool(config.DOUBAO_API_KEY),
     })
+

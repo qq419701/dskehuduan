@@ -7,3 +7,5 @@ Werkzeug==3.0.3
 pytz==2024.1
 python-dotenv==1.0.1
 gunicorn==22.0.0
+PyMySQL==1.1.1
+cryptography==42.0.8

@@ -2,8 +2,8 @@
 """
 配置文件 - 爱客服AI智能客服系统
 功能说明：系统全局配置，包括数据库、端口、时区、AI接口等参数
-作者：aikefu
-时间：北京时间
+数据库：优先使用MySQL，回退到SQLite（开发环境）
+时间：使用北京时间（Asia/Shanghai，UTC+8）
 """
 
 import os
@@ -13,9 +13,9 @@ import pytz
 # 基础配置
 # ============================================================
 
-# 系统名称
+# 系统名称及版本
 SYSTEM_NAME = "爱客服AI智能客服系统"
-SYSTEM_VERSION = "v1.0.0"
+SYSTEM_VERSION = "v2.0.0"
 
 # 服务端口（按需求设置为6000）
 PORT = 6000
@@ -34,31 +34,65 @@ DEBUG = os.environ.get('DEBUG', 'False').lower() == 'true'
 
 
 # ============================================================
-# 数据库配置
+# 数据库配置（优先MySQL，回退SQLite）
 # ============================================================
 
-# 数据库文件路径（SQLite）
+# MySQL连接配置（生产环境使用环境变量）
+MYSQL_HOST = os.environ.get('MYSQL_HOST', 'localhost')
+MYSQL_PORT = int(os.environ.get('MYSQL_PORT', '3306'))
+MYSQL_USER = os.environ.get('MYSQL_USER', 'aikefu')
+MYSQL_PASSWORD = os.environ.get('MYSQL_PASSWORD', '')
+MYSQL_DATABASE = os.environ.get('MYSQL_DATABASE', 'aikefu')
+
+# SQLite回退路径（开发/测试环境）
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_PATH = os.path.join(BASE_DIR, 'instance', 'aikefu.db')
-SQLALCHEMY_DATABASE_URI = f'sqlite:///{DATABASE_PATH}'
+
+# 数据库URI：有MySQL密码则用MySQL，否则用SQLite
+if MYSQL_PASSWORD or os.environ.get('USE_MYSQL', 'false').lower() == 'true':
+    # MySQL连接（使用PyMySQL驱动）
+    SQLALCHEMY_DATABASE_URI = (
+        f'mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}'
+        f'@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}'
+        f'?charset=utf8mb4'
+    )
+else:
+    # SQLite（开发/测试用）
+    SQLALCHEMY_DATABASE_URI = f'sqlite:///{DATABASE_PATH}'
+
 SQLALCHEMY_TRACK_MODIFICATIONS = False
+# MySQL连接池配置（SQLite下忽略）
+SQLALCHEMY_ENGINE_OPTIONS = {
+    'pool_recycle': 3600,   # 1小时回收连接，防止MySQL断开
+    'pool_pre_ping': True,  # 使用前检测连接是否有效
+}
 
 
 # ============================================================
 # 豆包AI配置（字节跳动火山方舟）
+# 模型分工：
+#   doubao-lite → 意图识别、日常FAQ回复、多轮对话、批量知识生成（速度快成本低）
+#   doubao-pro  → 换号/退款决策、情绪安抚（关键决策要更准）
+#   doubao-vision-pro → 图片分析（唯一支持图片的多模态模型）
 # ============================================================
 
 # 火山方舟API地址
 DOUBAO_API_BASE = "https://ark.cn-beijing.volces.com/api/v3"
 
-# API密钥（从火山方舟控制台获取，生产环境使用环境变量）
+# API密钥（从火山方舟控制台获取）
 DOUBAO_API_KEY = os.environ.get('DOUBAO_API_KEY', '')
 
-# 默认使用的豆包模型（豆包-pro-32k）
-DOUBAO_MODEL = os.environ.get('DOUBAO_MODEL', 'ep-20240601-xxxx')  # 替换为实际endpoint
+# doubao-lite 模型端点（意图识别/FAQ/多轮对话/知识生成，速度快成本低）
+DOUBAO_LITE_MODEL = os.environ.get('DOUBAO_LITE_MODEL', 'doubao-lite-32k')
 
-# 豆包视觉模型（图片识别）
-DOUBAO_VISION_MODEL = os.environ.get('DOUBAO_VISION_MODEL', 'ep-vision-xxxx')
+# doubao-pro 模型端点（退款/换号决策、情绪安抚，准确度更高）
+DOUBAO_PRO_MODEL = os.environ.get('DOUBAO_PRO_MODEL', 'doubao-pro-32k')
+
+# doubao-vision-pro 模型端点（图片分析，多模态）
+DOUBAO_VISION_MODEL = os.environ.get('DOUBAO_VISION_MODEL', 'doubao-vision-pro-32k')
+
+# 兼容旧配置：默认模型（FAQ回复用lite）
+DOUBAO_MODEL = DOUBAO_LITE_MODEL
 
 # AI请求超时时间（秒）
 DOUBAO_TIMEOUT = 30
@@ -68,6 +102,9 @@ DOUBAO_MAX_TOKENS = 500
 
 # AI温度参数（0.0-1.0，越低越精确）
 DOUBAO_TEMPERATURE = 0.3
+
+# 知识库批量生成时的最大token数（通常需要更多输出）
+DOUBAO_KB_MAX_TOKENS = 2000
 
 
 # ============================================================
@@ -108,6 +145,17 @@ HUMAN_INTERVENTION_LEVEL = 3
 
 
 # ============================================================
+# 多轮对话配置
+# ============================================================
+
+# 多轮对话上下文保留的最大轮次（每轮=买家+AI各一条）
+MAX_CONTEXT_TURNS = 10
+
+# 多轮对话会话超时时间（分钟，超时则重置上下文）
+CONTEXT_TIMEOUT_MINUTES = 30
+
+
+# ============================================================
 # 定时任务配置（北京时间）
 # ============================================================
 
@@ -134,14 +182,14 @@ DEFAULT_INDUSTRIES = [
         'name': '游戏租号',
         'description': '游戏账号租赁平台客服，支持拼多多/淘宝等电商平台',
         'icon': '🎮',
-        'platform': 'pdd',  # 主要平台
+        'platform': 'pdd',  # 当前重点支持拼多多
     },
     {
         'code': 'ecommerce',
         'name': '电商客服',
         'description': '通用电商平台客服，适用于各类商品销售',
         'icon': '🛍️',
-        'platform': 'general',
+        'platform': 'pdd',
     },
     {
         'code': 'education',
@@ -176,14 +224,17 @@ AUTO_REPLY_DELAY_MAX = 3
 
 
 # ============================================================
-# 黑名单配置
+# 黑名单/风险管理配置
 # ============================================================
 
-# 触发黑名单的退款次数阈值
+# 触发黑名单的退款次数阈值（30天内超过此次数自动加入风险名单）
 BLACKLIST_REFUND_THRESHOLD = 3
 
 # 黑名单检查周期（天）
 BLACKLIST_CHECK_PERIOD = 30
+
+# 退款超时预警（小时，距离平台强制退款时间小于此值时标红）
+REFUND_URGENT_HOURS = 24
 
 
 # ============================================================
@@ -194,3 +245,4 @@ LOG_DIR = os.path.join(BASE_DIR, 'logs')
 LOG_LEVEL = 'INFO'
 LOG_MAX_BYTES = 10 * 1024 * 1024  # 10MB
 LOG_BACKUP_COUNT = 5
+

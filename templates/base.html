@@ -132,6 +132,29 @@
                     <span id="pending-badge" class="badge bg-danger ms-auto" style="display:none"></span>
                 </a>
             </li>
+
+            <li class="nav-item">
+                <a class="nav-link {% if request.blueprint == 'learning' %}active{% endif %}"
+                   href="{{ url_for('learning.index') }}">
+                    <i class="bi bi-mortarboard"></i>🎓 学习中心
+                    <span id="learning-badge" class="badge bg-warning text-dark ms-auto" style="display:none"></span>
+                </a>
+            </li>
+
+            <li class="nav-item">
+                <a class="nav-link {% if request.blueprint == 'refund' %}active{% endif %}"
+                   href="{{ url_for('refund.index') }}">
+                    <i class="bi bi-cash-stack"></i>💰 退款管理
+                    <span id="refund-badge" class="badge bg-danger ms-auto" style="display:none"></span>
+                </a>
+            </li>
+
+            <li class="nav-item">
+                <a class="nav-link {% if request.blueprint == 'risk' %}active{% endif %}"
+                   href="{{ url_for('risk.index') }}">
+                    <i class="bi bi-shield-exclamation"></i>🛡️ 风险管理
+                </a>
+            </li>
             
             <!-- 配置管理 -->
             <div class="sidebar-heading mt-2">配置管理</div>
@@ -180,6 +203,29 @@
                 <a class="nav-link {% if request.blueprint == 'stats' %}active{% endif %}"
                    href="{{ url_for('stats.index') }}">
                     <i class="bi bi-bar-chart-line"></i>统计报表
+                </a>
+            </li>
+
+            <!-- 预留接入（占位） -->
+            <div class="sidebar-heading mt-2">预留功能（开发中）</div>
+            <li class="nav-item">
+                <a class="nav-link disabled opacity-50" href="#" title="淘宝接入预留">
+                    <i class="bi bi-bag"></i>淘宝 <small class="ms-1 opacity-75">（预留）</small>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link disabled opacity-50" href="#" title="京东接入预留">
+                    <i class="bi bi-bag-check"></i>京东 <small class="ms-1 opacity-75">（预留）</small>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link disabled opacity-50" href="#" title="抖店接入预留">
+                    <i class="bi bi-camera-video"></i>抖店 <small class="ms-1 opacity-75">（预留）</small>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link disabled opacity-50" href="#" title="u号租一键换号预留">
+                    <i class="bi bi-arrow-repeat"></i>一键换号 <small class="ms-1 opacity-75">（预留）</small>
                 </a>
             </li>
         </ul>
@@ -290,6 +336,29 @@ function updatePendingBadge() {
 }
 setInterval(updatePendingBadge, 30000);
 updatePendingBadge();
+
+// 定时获取风险数据（退款紧急提醒、学习中心待审核数）
+function updateRiskBadges() {
+    fetch('/risk/api/summary')
+        .then(r => r.json())
+        .then(data => {
+            var refundBadge = document.getElementById('refund-badge');
+            if (refundBadge) {
+                if (data.urgent_refunds > 0) {
+                    refundBadge.textContent = '紧急 ' + data.urgent_refunds;
+                    refundBadge.style.display = '';
+                } else if (data.pending_refunds > 0) {
+                    refundBadge.textContent = data.pending_refunds;
+                    refundBadge.style.display = '';
+                } else {
+                    refundBadge.style.display = 'none';
+                }
+            }
+        })
+        .catch(function(){});
+}
+setInterval(updateRiskBadges, 60000);
+updateRiskBadges();
 </script>
 
 {% block extra_js %}{% endblock %}
