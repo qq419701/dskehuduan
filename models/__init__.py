@@ -13,6 +13,9 @@ from .user import User
 from .blacklist import Blacklist
 from .rule import Rule
 from .stats import DailyStats
+from .conversation import ConversationContext
+from .refund import RefundRecord
+from .learning import LearningRecord
 
 __all__ = [
     'db', 'init_db',
@@ -23,4 +26,7 @@ __all__ = [
     'Blacklist',
     'Rule',
     'DailyStats',
+    'ConversationContext',
+    'RefundRecord',
+    'LearningRecord',
 ]
