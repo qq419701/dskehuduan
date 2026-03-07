@@ -36,3 +36,4 @@ temp/
 
 # 运行时创建的目录
 instance/
+.env
