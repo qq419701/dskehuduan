@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "爱客服拼多多采集插件",
+  "version": "1.0.0",
+  "description": "采集拼多多商家后台聊天消息，推送到爱客服AI客服系统",
+  "permissions": [
+    "storage",
+    "notifications",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://mms.pinduoduo.com/*",
+    "http://8.145.43.255:6000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mms.pinduoduo.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "爱客服采集插件"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
