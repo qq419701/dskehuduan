@@ -108,7 +108,7 @@ class ChannelWorker(QThread):
         )
 
         # 运行 WebSocket 采集（带自动重连）
-        await self._channel._run_with_reconnect()
+        await self._channel.run_with_reconnect()
         self.status_changed.emit(shop_id, False)
 
     def stop_channel(self):

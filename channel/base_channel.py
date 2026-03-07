@@ -43,7 +43,7 @@ class BaseChannel(ABC):
             logger.warning("渠道 %s 已在运行", self.shop_id)
             return
         self.is_running = True
-        self._task = asyncio.create_task(self._run_with_reconnect())
+        self._task = asyncio.create_task(self.run_with_reconnect())
 
     async def stop(self):
         """停止渠道"""
@@ -57,7 +57,7 @@ class BaseChannel(ABC):
         await self.disconnect()
         logger.info("渠道 %s 已停止", self.shop_id)
 
-    async def _run_with_reconnect(self):
+    async def run_with_reconnect(self):
         """带自动重连的运行循环（指数退避，最多重试5次）"""
         retry_count = 0
         max_retries = 5

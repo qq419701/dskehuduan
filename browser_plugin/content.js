@@ -109,10 +109,15 @@
       const fingerprint = makeFingerprint(data);
       if (seenFingerprints.has(fingerprint)) return;
 
-      // 去重集合大小控制
+      // 去重集合大小控制：超出限制时批量清除20%最旧条目
       if (seenFingerprints.size >= MAX_FINGERPRINT_SIZE) {
+        const removeCount = Math.ceil(MAX_FINGERPRINT_SIZE * 0.2);
         const iter = seenFingerprints.values();
-        seenFingerprints.delete(iter.next().value);
+        for (let i = 0; i < removeCount; i++) {
+          const next = iter.next();
+          if (next.done) break;
+          seenFingerprints.delete(next.value);
+        }
       }
       seenFingerprints.add(fingerprint);
 

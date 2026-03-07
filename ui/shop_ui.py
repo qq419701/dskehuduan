@@ -12,6 +12,8 @@ from PyQt6.QtWidgets import (
     QScrollArea, QFrame, QGridLayout, QMessageBox, QSizePolicy,
 )
 
+import config as cfg
+
 logger = logging.getLogger(__name__)
 
 
@@ -170,7 +172,7 @@ class ShopPage(QWidget):
 
         if not shops:
             no_shop = QLabel(
-                "暂无店铺。\n请先在 aikefu 后台（http://8.145.43.255:6000）添加店铺，\n然后点击上方「刷新店铺列表」。"
+                f"暂无店铺。\n请先在 aikefu 后台（{cfg.get_server_url()}）添加店铺，\n然后点击上方「刷新店铺列表」。"
             )
             no_shop.setAlignment(Qt.AlignmentFlag.AlignCenter)
             no_shop.setStyleSheet("color: #999; font-size: 13px; margin: 40px;")

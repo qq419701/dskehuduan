@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import deque
 from typing import Optional, Callable
 
 import websockets
@@ -43,7 +44,9 @@ class PddChannel(BaseChannel):
 
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
-        self._seen_msg_ids: set = set()  # 消息去重
+        # 消息去重：使用 deque 保持插入顺序，限制大小避免内存泄漏
+        self._seen_msg_ids: deque = deque(maxlen=10000)
+        self._seen_msg_ids_set: set = set()
 
     # ------------------------------------------------------------------
     # BaseChannel 接口实现
@@ -166,15 +169,17 @@ class PddChannel(BaseChannel):
         if not parsed:
             return
 
-        # 消息去重
+        # 消息去重（deque maxlen=10000 自动淘汰旧条目）
         msg_id = parsed.get("msg_id", "")
-        if msg_id and msg_id in self._seen_msg_ids:
-            return
         if msg_id:
-            self._seen_msg_ids.add(msg_id)
-            # 限制集合大小，防止内存泄漏
-            if len(self._seen_msg_ids) > 10000:
-                self._seen_msg_ids.clear()
+            if msg_id in self._seen_msg_ids_set:
+                return
+            # 如果 deque 满了，从 set 中移除被淘汰的最旧条目
+            if len(self._seen_msg_ids) == self._seen_msg_ids.maxlen:
+                oldest = self._seen_msg_ids[0]
+                self._seen_msg_ids_set.discard(oldest)
+            self._seen_msg_ids.append(msg_id)
+            self._seen_msg_ids_set.add(msg_id)
 
         await self._process_message(parsed)
 
