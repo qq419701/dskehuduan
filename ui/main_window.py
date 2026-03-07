@@ -182,7 +182,7 @@ class MainWindow(FluentWindow):
         self.setting_page.setObjectName("settingPage")
 
         self.addSubInterface(self.dashboard_page, FluentIcon.HOME, "首页")
-        self.addSubInterface(self.shop_page, FluentIcon.SHOP, "店铺管理")
+        self.addSubInterface(self.shop_page, FluentIcon.SHOPPING_CART, "店铺管理")
         self.addSubInterface(self.message_page, FluentIcon.CHAT, "消息监控")
         self.addSubInterface(
             self.setting_page,

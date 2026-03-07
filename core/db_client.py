@@ -52,7 +52,7 @@ class DBClient:
     def get_shops(self) -> list:
         """获取所有启用的店铺列表"""
         sql = text(
-            "SELECT shop_id, name, platform, platform_shop_id, shop_token, "
+            "SELECT id AS shop_id, name, platform, platform_shop_id, shop_token, "
             "auto_reply_enabled, is_active "
             "FROM shops WHERE is_active = 1"
         )
@@ -68,7 +68,7 @@ class DBClient:
     def get_shop_by_token(self, shop_token: str) -> Optional[dict]:
         """通过shop_token获取店铺信息"""
         sql = text(
-            "SELECT shop_id, name, platform, platform_shop_id, shop_token, "
+            "SELECT id AS shop_id, name, platform, platform_shop_id, shop_token, "
             "auto_reply_enabled, is_active "
             "FROM shops WHERE shop_token = :token LIMIT 1"
         )
@@ -85,7 +85,7 @@ class DBClient:
         """更新店铺的平台access_token"""
         sql = text(
             "UPDATE shops SET access_token = :token, token_expires_at = :expires "
-            "WHERE shop_id = :shop_id"
+            "WHERE id = :shop_id"
         )
         try:
             with self.engine.begin() as conn:
