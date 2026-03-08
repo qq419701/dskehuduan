@@ -25,7 +25,10 @@ class UHaozuAutomation:
         if self._browser is None:
             from playwright.async_api import async_playwright
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(headless=headless)
+            self._browser = await self._playwright.chromium.launch(
+                headless=headless,
+                executable_path=self._get_chrome_path(),
+            )
             self._context = await self._browser.new_context()
             if self.cookies:
                 cookie_list = [
@@ -34,6 +37,22 @@ class UHaozuAutomation:
                 ]
                 await self._context.add_cookies(cookie_list)
             self._page = await self._context.new_page()
+
+    @staticmethod
+    def _get_chrome_path() -> "str | None":
+        """获取本地Chrome路径"""
+        import os
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        candidates = [
+            os.path.join(local_app_data, r"Google\Chrome\Application\chrome.exe"),
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            r"C:\Users\Administrator\Desktop\chrome-win64\chrome.exe",
+        ]
+        for p in candidates:
+            if p and os.path.exists(p):
+                return p
+        return None  # 使用playwright内置
 
     async def close(self):
         """关闭浏览器"""
@@ -50,8 +69,11 @@ class UHaozuAutomation:
             self._page = None
 
     async def login(self) -> bool:
-        """登录U号租（员工号登录），保存cookies"""
+        """登录U号租（员工号登录），headless=False 显示浏览器"""
         try:
+            # 如果已有浏览器实例（headless模式），先关闭再以有界面模式重新启动
+            if self._browser is not None:
+                await self.close()
             await self._ensure_browser(headless=False)
             page = self._page
 
