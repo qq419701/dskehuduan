@@ -5,6 +5,7 @@
 """
 import os
 import json
+import uuid
 from typing import Optional
 
 # aikefu服务器地址
@@ -87,3 +88,121 @@ def get_server_url() -> str:
     """获取aikefu服务器地址"""
     cfg = load_config()
     return cfg.get("server_url", AIKEFU_SERVER)
+
+
+# ── U号租相关配置 ──────────────────────────────────────────────────────────────
+
+
+def get_uhaozu_accounts() -> list:
+    """获取U号租账号列表（密码已解密）"""
+    from core.encrypt import decrypt_password
+    cfg = load_config()
+    accounts = cfg.get("uhaozu_accounts", [])
+    result = []
+    for acc in accounts:
+        a = dict(acc)
+        if a.get("password_enc"):
+            try:
+                a["password"] = decrypt_password(a["password_enc"])
+            except Exception:
+                a["password"] = ""
+        else:
+            a["password"] = ""
+        result.append(a)
+    return result
+
+
+def save_uhaozu_accounts(accounts: list) -> bool:
+    """保存U号租账号列表（密码加密存储）"""
+    from core.encrypt import encrypt_password
+    cfg = load_config()
+    to_save = []
+    for acc in accounts:
+        a = dict(acc)
+        if "password" in a and a["password"]:
+            try:
+                a["password_enc"] = encrypt_password(a["password"])
+            except Exception:
+                pass
+        a.pop("password", None)
+        if not a.get("id"):
+            a["id"] = str(uuid.uuid4())
+        to_save.append(a)
+    cfg["uhaozu_accounts"] = to_save
+    return save_config(cfg)
+
+
+def get_uhaozu_settings() -> dict:
+    """获取U号租设置"""
+    cfg = load_config()
+    default = {
+        "max_exchange_per_order": 5,
+        "price_markup_rules": [
+            {"min": 0.1, "max": 0.5, "markup": 0.5},
+            {"min": 0.5, "max": 1.0, "markup": 1.0},
+            {"min": 1.0, "max": 10.0, "markup": 2.0},
+        ],
+        "game_configs": {
+            "王者荣耀": {
+                "platforms": ["安卓", "苹果"],
+                "login_methods": ["微信", "QQ"],
+                "filters": {
+                    "no_deposit": True,
+                    "time_rental_bonus": True,
+                    "login_tool": True,
+                    "anti_addiction": True,
+                    "non_cloud": True,
+                    "high_login_rate": True,
+                    "no_friend_add": False,
+                    "allow_ranked": True,
+                },
+            },
+            "火影忍者": {
+                "platforms": ["安卓", "苹果"],
+                "login_methods": ["微信", "QQ"],
+                "filters": {
+                    "no_deposit": True,
+                    "time_rental_bonus": True,
+                    "login_tool": True,
+                    "anti_addiction": True,
+                    "non_cloud": True,
+                    "high_login_rate": True,
+                    "no_friend_add": False,
+                    "allow_ranked": True,
+                },
+            },
+            "和平精英": {
+                "platforms": ["安卓", "苹果"],
+                "login_methods": ["微信", "QQ"],
+                "filters": {
+                    "no_deposit": True,
+                    "time_rental_bonus": True,
+                    "login_tool": True,
+                    "anti_addiction": True,
+                    "non_cloud": True,
+                    "high_login_rate": True,
+                    "no_friend_add": False,
+                    "allow_ranked": True,
+                },
+            },
+        },
+    }
+    saved = cfg.get("uhaozu_settings", {})
+    default.update(saved)
+    return default
+
+
+def save_uhaozu_settings(settings: dict) -> bool:
+    """保存U号租设置"""
+    cfg = load_config()
+    cfg["uhaozu_settings"] = settings
+    return save_config(cfg)
+
+
+def get_default_uhaozu_account() -> Optional[dict]:
+    """获取默认U号租账号（密码已解密）"""
+    accounts = get_uhaozu_accounts()
+    for acc in accounts:
+        if acc.get("is_default"):
+            return acc
+    return accounts[0] if accounts else None
