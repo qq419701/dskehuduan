@@ -161,6 +161,30 @@ class PddChannel(BaseChannel):
 
         if msg_type not in ('text','image','goods','order') or not content:
             return
+
+        # ── 自动换号检测 ──
+        if msg_type == 'text' and content:
+            try:
+                from core.exchange_number import ExchangeHandler
+                if not hasattr(self, '_exchange_handler'):
+                    self._exchange_handler = ExchangeHandler()
+                if self._exchange_handler.is_exchange_request(content):
+                    handled = await self._exchange_handler.handle_exchange(
+                        buyer_id=buyer_id,
+                        buyer_name=buyer_name,
+                        content=content,
+                        order_id=order_id,
+                        order_info=order_info,
+                        sender=self.sender,
+                        shop_id=self.shop_id,
+                        db_client=self.db_client,
+                    )
+                    if handled:
+                        return  # 已处理，不再走 AI 流程
+            except Exception as e:
+                logger.error('自动换号处理异常: %s', e)
+                # fallback: 继续走 AI 流程
+
         if not self.server_api: return
 
         try:
