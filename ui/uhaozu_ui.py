@@ -100,16 +100,22 @@ class AddAccountDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("添加U号租账号")
-        self.resize(360, 160)
+        self.resize(360, 200)
 
         layout = QFormLayout(self)
-        self._username = QLineEdit()
-        self._username.setPlaceholderText("请输入U号租账号")
+
+        self._phone = QLineEdit()
+        self._phone.setPlaceholderText("请输入手机号")
+
+        self._employee = QLineEdit()
+        self._employee.setPlaceholderText("请输入员工账号")
+
         self._password = QLineEdit()
         self._password.setPlaceholderText("请输入密码")
         self._password.setEchoMode(QLineEdit.EchoMode.Password)
 
-        layout.addRow("账号：", self._username)
+        layout.addRow("手机号：", self._phone)
+        layout.addRow("员工账号：", self._employee)
         layout.addRow("密码：", self._password)
 
         buttons = QDialogButtonBox(
@@ -120,7 +126,10 @@ class AddAccountDialog(QDialog):
         layout.addRow(buttons)
 
     def get_data(self):
-        return self._username.text().strip(), self._password.text()
+        phone = self._phone.text().strip()
+        employee = self._employee.text().strip()
+        username = f"{phone}:{employee}" if phone and employee else ""
+        return username, self._password.text()
 
 
 # ── Tab1: 账号管理 ──────────────────────────────────────────────────────────────
@@ -200,8 +209,8 @@ class AccountTab(QWidget):
         dlg = AddAccountDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             username, password = dlg.get_data()
-            if not username:
-                QMessageBox.warning(self, "提示", "账号不能为空")
+            if not username or ':' not in username or username.startswith(':') or username.endswith(':'):
+                QMessageBox.warning(self, "提示", "手机号和员工账号不能为空")
                 return
             accounts = cfg.get_uhaozu_accounts()
             accounts.append({

@@ -20,12 +20,12 @@ class UHaozuAutomation:
         self._context = None
         self._page = None
 
-    async def _ensure_browser(self):
+    async def _ensure_browser(self, headless: bool = True):
         """确保浏览器已启动"""
         if self._browser is None:
             from playwright.async_api import async_playwright
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(headless=True)
+            self._browser = await self._playwright.chromium.launch(headless=headless)
             self._context = await self._browser.new_context()
             if self.cookies:
                 cookie_list = [
@@ -50,33 +50,96 @@ class UHaozuAutomation:
             self._page = None
 
     async def login(self) -> bool:
-        """登录U号租，保存cookies"""
+        """登录U号租（员工号登录），保存cookies"""
         try:
-            await self._ensure_browser()
+            await self._ensure_browser(headless=False)
             page = self._page
 
             await page.goto(f"{self.BASE_URL}/login", wait_until="networkidle", timeout=30000)
 
-            # 填写账号密码
-            await page.fill('input[type="text"], input[name="username"], input[placeholder*="账号"]',
-                            self.username)
-            await page.fill('input[type="password"], input[name="password"], input[placeholder*="密码"]',
-                            self.password)
+            # 1. 点击「员工号登录」Tab（文字匹配）
+            employee_tab_selectors = [
+                'text=员工号登录',
+                ':has-text("员工号登录")',
+                '.tab:has-text("员工号")',
+                '[class*="tab"]:has-text("员工号")',
+            ]
+            for sel in employee_tab_selectors:
+                try:
+                    el = await page.query_selector(sel)
+                    if el:
+                        await el.click()
+                        await page.wait_for_timeout(500)
+                        break
+                except Exception:
+                    continue
 
-            # 点击登录按钮
-            await page.click('button[type="submit"], button:has-text("登录")')
-            await page.wait_for_load_state("networkidle", timeout=15000)
+            # 2. 获取所有文本输入框（按顺序）
+            # 第1个：手机号
+            # 第2个：员工账号
+            # 第3个：密码
+            inputs = await page.query_selector_all(
+                'input[type="text"], input[type="tel"], input[type="number"]'
+            )
 
-            # 检测是否登录成功
+            # username格式为 "手机号:员工账号"，从 self.username 解析
+            if ':' in self.username:
+                phone, employee_id = self.username.split(':', 1)
+            else:
+                logger.warning("username格式不正确，应为 '手机号:员工账号'，当前值: %s", self.username)
+                phone = self.username
+                employee_id = self.username
+
+            # 填写手机号（第1个输入框）
+            if len(inputs) > 0:
+                await inputs[0].fill(phone)
+
+            # 填写员工账号（第2个输入框）
+            if len(inputs) > 1:
+                await inputs[1].fill(employee_id)
+
+            # 填写密码（密码框）
+            pwd_input = await page.query_selector('input[type="password"]')
+            if pwd_input:
+                await pwd_input.fill(self.password)
+
+            # 3. 处理验证码（如果有）
+            await page.wait_for_timeout(1000)
+            captcha_visible = await page.query_selector(
+                '.captcha, [class*="verify"], [class*="captcha"]'
+            )
+            if captcha_visible:
+                # 验证码是点击图片文字类型，无法自动处理，等待用户手动操作（30秒）
+                logger.warning("检测到图片点击验证码，等待手动处理...")
+                await page.wait_for_timeout(30000)
+
+            # 4. 点击登录按钮
+            login_btn_selectors = [
+                'button:has-text("登录")',
+                'button[type="submit"]',
+                '.login-btn',
+                '[class*="login"]:has-text("登录")',
+            ]
+            for sel in login_btn_selectors:
+                try:
+                    btn = await page.query_selector(sel)
+                    if btn:
+                        await btn.click()
+                        break
+                except Exception:
+                    continue
+
+            await page.wait_for_load_state("networkidle", timeout=20000)
+
+            # 5. 验证登录结果
             current_url = page.url
             if "/login" not in current_url:
-                # 保存cookies
                 cookies = await self._context.cookies()
                 self.cookies = {c["name"]: c["value"] for c in cookies}
                 logger.info("U号租登录成功: %s", self.username)
                 return True
             else:
-                logger.warning("U号租登录失败: %s", self.username)
+                logger.warning("U号租登录失败，当前URL: %s", current_url)
                 return False
         except Exception as e:
             logger.error("U号租登录异常: %s", e)
