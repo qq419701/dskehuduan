@@ -151,13 +151,14 @@ class AccountTab(QWidget):
         self._btn_add = QPushButton("➕ 添加账号")
         self._btn_delete = QPushButton("🗑️ 删除账号")
         self._btn_default = QPushButton("⭐ 设为默认")
+        self._btn_login = QPushButton("🔑 登录")
         self._btn_check = QPushButton("🔍 检测登录")
         self._btn_balance = QPushButton("💰 查询余额")
         self._status_label = QLabel("")
         self._status_label.setStyleSheet("color: #888;")
 
         for btn in [self._btn_add, self._btn_delete, self._btn_default,
-                    self._btn_check, self._btn_balance]:
+                    self._btn_login, self._btn_check, self._btn_balance]:
             toolbar.addWidget(btn)
         toolbar.addWidget(self._status_label)
         toolbar.addStretch()
@@ -180,6 +181,7 @@ class AccountTab(QWidget):
         self._btn_add.clicked.connect(self._on_add)
         self._btn_delete.clicked.connect(self._on_delete)
         self._btn_default.clicked.connect(self._on_set_default)
+        self._btn_login.clicked.connect(self._on_login)
         self._btn_check.clicked.connect(self._on_check_login)
         self._btn_balance.clicked.connect(self._on_query_balance)
 
@@ -204,6 +206,13 @@ class AccountTab(QWidget):
     def _selected_row(self):
         rows = self._table.selectionModel().selectedRows()
         return rows[0].row() if rows else -1
+
+    def _get_active_account_row(self, accounts: list) -> int:
+        """返回当前选中行，未选中时回退到默认账号所在行（没有则取第0行）"""
+        row = self._selected_row()
+        if row < 0 or row >= len(accounts):
+            row = next((i for i, a in enumerate(accounts) if a.get("is_default")), 0)
+        return row
 
     def _on_add(self):
         dlg = AddAccountDialog(self)
@@ -253,13 +262,12 @@ class AccountTab(QWidget):
             self._load_accounts()
 
     def _on_check_login(self):
-        row = self._selected_row()
-        if row < 0:
-            QMessageBox.information(self, "提示", "请先选择账号")
-            return
         accounts = cfg.get_uhaozu_accounts()
-        if row >= len(accounts):
+        if not accounts:
+            QMessageBox.warning(self, "提示", "请先添加账号")
             return
+
+        row = self._get_active_account_row(accounts)
         acc = accounts[row]
         self._set_busy(True, "检测中...")
 
@@ -292,14 +300,61 @@ class AccountTab(QWidget):
             cfg.save_uhaozu_accounts(accounts)
             self._refresh_table(accounts)
 
-    def _on_query_balance(self):
-        row = self._selected_row()
-        if row < 0:
-            QMessageBox.information(self, "提示", "请先选择账号")
-            return
+    def _on_login(self):
         accounts = cfg.get_uhaozu_accounts()
-        if row >= len(accounts):
+        if not accounts:
+            QMessageBox.warning(self, "提示", "请先添加账号")
             return
+
+        row = self._get_active_account_row(accounts)
+        acc = accounts[row]
+        self._set_busy(True, "登录中，请在弹出的浏览器中完成操作...")
+
+        from automation.uhaozu import UHaozuAutomation
+        automation = UHaozuAutomation(
+            username=acc.get("username", ""),
+            password=acc.get("password", ""),
+            cookies=acc.get("cookies", {}),
+        )
+
+        async def _do_login():
+            try:
+                success = await automation.login()
+                if success:
+                    return {"success": True, "cookies": automation.cookies, "row": row}
+                return {"success": False, "cookies": {}, "row": row}
+            finally:
+                await automation.close()
+
+        worker = _AsyncWorker(_do_login, self)
+        worker.finished.connect(self._on_login_done)
+        worker.error.connect(lambda e: self._on_worker_error(e))
+        worker.finished.connect(lambda _: self._set_busy(False, ""))
+        worker.error.connect(lambda _: self._set_busy(False, ""))
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_login_done(self, result: dict):
+        row = result.get("row", 0)
+        success = result.get("success", False)
+        if success:
+            accounts = cfg.get_uhaozu_accounts()
+            if row < len(accounts):
+                accounts[row]["cookies"] = result.get("cookies", {})
+                accounts[row]["online"] = True
+                cfg.save_uhaozu_accounts(accounts)
+                self._refresh_table(accounts)
+            QMessageBox.information(self, "成功", "登录成功！")
+        else:
+            QMessageBox.warning(self, "失败", "登录失败，请检查账号密码或手动处理验证码")
+
+    def _on_query_balance(self):
+        accounts = cfg.get_uhaozu_accounts()
+        if not accounts:
+            QMessageBox.warning(self, "提示", "请先添加账号")
+            return
+
+        row = self._get_active_account_row(accounts)
         acc = accounts[row]
         self._set_busy(True, "查询中...")
 
@@ -336,7 +391,7 @@ class AccountTab(QWidget):
 
     def _set_busy(self, busy: bool, text: str):
         for btn in [self._btn_add, self._btn_delete, self._btn_default,
-                    self._btn_check, self._btn_balance]:
+                    self._btn_login, self._btn_check, self._btn_balance]:
             btn.setEnabled(not busy)
         self._status_label.setText(text)
 
