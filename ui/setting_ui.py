@@ -124,6 +124,20 @@ class SettingPage(QWidget):
         startup_form.addRow('', self.startup_enabled)
         layout.addWidget(startup_group)
 
+        # 任务执行器
+        runner_group = QGroupBox('任务执行器（插件自动化）')
+        runner_form = QFormLayout(runner_group)
+        self.runner_enabled = QCheckBox('启用 aikefu 任务自动轮询执行器')
+        runner_form.addRow('', self.runner_enabled)
+        self.shop_token_edit = QLineEdit()
+        self.shop_token_edit.setPlaceholderText('店铺 Token（X-Shop-Token）')
+        self.shop_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        runner_form.addRow('店铺 Token:', self.shop_token_edit)
+        self.runner_poll_edit = QLineEdit()
+        self.runner_poll_edit.setPlaceholderText('2')
+        runner_form.addRow('轮询间隔（秒）:', self.runner_poll_edit)
+        layout.addWidget(runner_group)
+
         # 保存
         save_btn = QPushButton('💾  保存设置')
         save_btn.setFixedHeight(38)
@@ -144,6 +158,10 @@ class SettingPage(QWidget):
         self.mysql_user_edit.setText(mysql.get('user', ''))
         self.notify_enabled.setChecked(current.get('notify_enabled', True))
         self.startup_enabled.setChecked(current.get('startup_enabled', False))
+        runner = current.get('task_runner', {})
+        self.runner_enabled.setChecked(runner.get('enabled', False))
+        self.shop_token_edit.setText(current.get('shop_token', ''))
+        self.runner_poll_edit.setText(str(runner.get('poll_interval', cfg.TASK_RUNNER_POLL_INTERVAL)))
 
     def _test_connection(self):
         host = self.mysql_host_edit.text().strip()
@@ -193,6 +211,18 @@ class SettingPage(QWidget):
         current['mysql'] = mysql
         current['notify_enabled'] = self.notify_enabled.isChecked()
         current['startup_enabled'] = self.startup_enabled.isChecked()
+        # 任务执行器配置
+        shop_token = self.shop_token_edit.text().strip()
+        current['shop_token'] = shop_token
+        try:
+            poll_interval = int(self.runner_poll_edit.text().strip() or str(cfg.TASK_RUNNER_POLL_INTERVAL))
+        except ValueError:
+            poll_interval = cfg.TASK_RUNNER_POLL_INTERVAL
+        current['task_runner'] = {
+            'enabled': self.runner_enabled.isChecked(),
+            'poll_interval': poll_interval,
+            'heartbeat_interval': cfg.TASK_RUNNER_HEARTBEAT_INTERVAL,
+        }
         if cfg.save_config(current):
             if self.startup_enabled.isChecked():
                 self._setup_autostart()
