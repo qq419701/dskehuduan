@@ -196,7 +196,8 @@ class PddChannel(BaseChannel):
             api_result = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: self.server_api.send_message(
                     shop_id=self.shop_id, buyer_id=buyer_id, buyer_name=buyer_name,
-                    content=content, order_id=order_id, msg_type=msg_type, image_url=image_url,
+                    content=content, order_id=order_id, order_sn=order_id,
+                    msg_type=msg_type, image_url=image_url,
                 )
             )
         except Exception as e:

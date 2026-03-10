@@ -319,17 +319,19 @@ class AikefuTaskRunner:
         处理转人工任务，自动操作拼多多聊天页面将会话转移给客服。
 
         payload 字段：
-          buyer_id  — 买家 ID（可选，用于定位会话）
-          order_sn  — 拼多多订单号（可选，优先用于定位会话）
-          order_id  — 内部订单 ID（可选，备用）
-          strategy  — 分配策略（first / random / least_busy / round_robin），
-                      不传则读取 config.get_transfer_strategy() 默认值
+          buyer_id   — 买家 ID（可选，兜底定位）
+          buyer_name — 买家昵称（优先用于搜索框定位，取前2字搜索）
+          order_sn   — 拼多多订单号（可选，URL参数优先定位）
+          order_id   — 内部订单 ID（可选，备用）
+          strategy   — 分配策略（first / random / least_busy / round_robin），
+                       不传则读取 config.get_transfer_strategy() 默认值
 
         返回：{"success": bool, "agent": str, "message": str}
         """
         from channel.pinduoduo.pdd_transfer import PddTransferHuman
 
         buyer_id = str(payload.get("buyer_id", ""))
+        buyer_name = str(payload.get("buyer_name", ""))
         order_sn = str(payload.get("order_sn", ""))
         strategy = payload.get("strategy") or config.get_transfer_strategy()
 
@@ -346,7 +348,11 @@ class AikefuTaskRunner:
             strategy=strategy,
         )
         try:
-            result = await transfer.transfer(buyer_id=buyer_id, order_sn=order_sn)
+            result = await transfer.transfer(
+                buyer_id=buyer_id,
+                order_sn=order_sn,
+                buyer_name=buyer_name,
+            )
         finally:
             await transfer.close()
 
