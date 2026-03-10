@@ -14,7 +14,7 @@ DEFAULT_TIMEOUT = 15
 class ServerAPI:
     """调用 aikefu Flask 服务器的 REST API"""
 
-    def __init__(self, base_url: str = "http://8.145.43.255:6000"):
+    def __init__(self, base_url: str = "http://8.145.43.255:5000"):
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
         self.session.headers.update({"Content-Type": "application/json"})
@@ -108,6 +108,86 @@ class ServerAPI:
             return resp.status_code < 500
         except requests.RequestException:
             return False
+
+    # ------------------------------------------------------------------
+    # 客户端账号认证接口
+    # ------------------------------------------------------------------
+
+    def client_login(self, username: str, password: str) -> dict:
+        """
+        客户端账号登录
+        POST /api/client/login
+        返回: {"success": true, "client_token": "xxx", "username": "admin"}
+        """
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/api/client/login",
+                json={"username": username, "password": password},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            logger.error("客户端登录失败: %s", e)
+            return {"success": False, "error": str(e)}
+
+    def client_get_shops(self, client_token: str) -> list:
+        """
+        获取登录用户名下的所有店铺（含 shop_token）
+        GET /api/client/shops
+        Header: X-Client-Token: <client_token>
+        返回: [{"id":1, "name":"店铺名", "shop_token":"xxx", "platform":"pdd", ...}]
+        """
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/api/client/shops",
+                headers={"X-Client-Token": client_token},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, list):
+                return data
+            return data.get("shops", []) if isinstance(data, dict) else []
+        except requests.RequestException as e:
+            logger.error("获取店铺列表失败: %s", e)
+            return []
+
+    def client_logout(self, client_token: str) -> dict:
+        """
+        客户端登出
+        POST /api/client/logout
+        """
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/api/client/logout",
+                json={},
+                headers={"X-Client-Token": client_token},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            logger.warning("登出请求失败: %s", e)
+            return {"success": False, "error": str(e)}
+
+    def client_refresh_token(self, client_token: str) -> dict:
+        """
+        刷新 client_token 有效期
+        POST /api/client/refresh
+        """
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/api/client/refresh",
+                json={},
+                headers={"X-Client-Token": client_token},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            logger.warning("刷新Token失败: %s", e)
+            return {"success": False, "error": str(e)}
 
     # ------------------------------------------------------------------
     # 插件相关接口（X-Shop-Token 鉴权）

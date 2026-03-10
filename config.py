@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-配置管理模块
-配置存储到 ~/.aikefu-client/config.json，密码AES加密保存
+配置管理模块（v2.0 纯API模式）
+配置存储到 ~/.aikefu-client/config.json，token/密码AES加密保存
 """
 import os
 import json
@@ -11,21 +11,20 @@ from typing import Optional
 # aikefu服务器地址
 AIKEFU_SERVER = "http://8.145.43.255:5000"
 
-# MySQL默认配置（连接aikefu数据库）
-MYSQL_CONFIG = {
-    "host": "8.145.43.255",
-    "port": 3306,
-    "database": "aikefu",
-    "charset": "utf8mb4",
-}
+# 应用版本
+APP_VERSION = "2.0.0"
+APP_NAME = "爱客服采集客户端"
+
+# 任务执行器默认参数
+TASK_RUNNER_POLL_INTERVAL = 2        # 轮询间隔（秒）
+TASK_RUNNER_HEARTBEAT_INTERVAL = 30  # 心跳间隔（秒）
 
 # 本地配置文件路径
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".aikefu-client")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
-# 应用版本
-APP_VERSION = "1.0.0"
-APP_NAME = "爱客服采集客户端"
+# 插件 ID 持久化文件路径
+PLUGIN_ID_FILE = os.path.join(CONFIG_DIR, "plugin_id.txt")
 
 
 def load_config() -> dict:
@@ -50,173 +49,69 @@ def save_config(config: dict) -> bool:
         return False
 
 
-def is_configured() -> bool:
-    """检查是否已完成初始配置（MySQL连接信息）"""
-    cfg = load_config()
-    return bool(cfg.get("mysql", {}).get("user"))
-
-
-def get_mysql_config() -> Optional[dict]:
-    """获取MySQL连接配置（密码已解密）"""
-    from core.encrypt import decrypt_password
-
-    cfg = load_config()
-    mysql = cfg.get("mysql", {})
-    if not mysql.get("user"):
-        return None
-
-    result = {
-        "host": mysql.get("host", MYSQL_CONFIG["host"]),
-        "port": int(mysql.get("port", MYSQL_CONFIG["port"])),
-        "database": mysql.get("database", MYSQL_CONFIG["database"]),
-        "charset": MYSQL_CONFIG["charset"],
-        "user": mysql.get("user", ""),
-        "password": "",
-    }
-
-    enc_password = mysql.get("password_enc", "")
-    if enc_password:
-        try:
-            result["password"] = decrypt_password(enc_password)
-        except Exception:
-            result["password"] = ""
-
-    return result
-
-
 def get_server_url() -> str:
     """获取aikefu服务器地址"""
     cfg = load_config()
     return cfg.get("server_url", AIKEFU_SERVER)
 
 
-# ── U号租相关配置 ──────────────────────────────────────────────────────────────
-
-
-def get_uhaozu_accounts() -> list:
-    """获取U号租账号列表（密码已解密）"""
-    from core.encrypt import decrypt_password
+def get_client_token() -> str:
+    """获取登录后的 client_token"""
     cfg = load_config()
-    accounts = cfg.get("uhaozu_accounts", [])
-    result = []
-    for acc in accounts:
-        a = dict(acc)
-        if a.get("password_enc"):
-            try:
-                a["password"] = decrypt_password(a["password_enc"])
-            except Exception:
-                a["password"] = ""
-        else:
-            a["password"] = ""
-        result.append(a)
-    return result
+    return cfg.get("client_token", "")
 
 
-def save_uhaozu_accounts(accounts: list) -> bool:
-    """保存U号租账号列表（密码加密存储）"""
-    from core.encrypt import encrypt_password
+def save_client_token(token: str) -> bool:
+    """保存 client_token 到本地配置"""
     cfg = load_config()
-    to_save = []
-    for acc in accounts:
-        a = dict(acc)
-        if "password" in a and a["password"]:
-            try:
-                a["password_enc"] = encrypt_password(a["password"])
-            except Exception:
-                pass
-        a.pop("password", None)
-        if not a.get("id"):
-            a["id"] = str(uuid.uuid4())
-        to_save.append(a)
-    cfg["uhaozu_accounts"] = to_save
+    cfg["client_token"] = token
     return save_config(cfg)
 
 
-def get_uhaozu_settings() -> dict:
-    """获取U号租设置"""
+def get_client_username() -> str:
+    """获取已登录的用户名"""
     cfg = load_config()
-    default = {
-        "max_exchange_per_order": 5,
-        "price_markup_rules": [
-            {"min": 0.1, "max": 0.5, "markup": 0.5},
-            {"min": 0.5, "max": 1.0, "markup": 1.0},
-            {"min": 1.0, "max": 10.0, "markup": 2.0},
-        ],
-        "game_configs": {
-            "王者荣耀": {
-                "platforms": ["安卓", "苹果"],
-                "login_methods": ["微信", "QQ"],
-                "filters": {
-                    "no_deposit": True,
-                    "time_rental_bonus": True,
-                    "login_tool": True,
-                    "anti_addiction": True,
-                    "non_cloud": True,
-                    "high_login_rate": True,
-                    "no_friend_add": False,
-                    "allow_ranked": True,
-                },
-            },
-            "火影忍者": {
-                "platforms": ["安卓", "苹果"],
-                "login_methods": ["微信", "QQ"],
-                "filters": {
-                    "no_deposit": True,
-                    "time_rental_bonus": True,
-                    "login_tool": True,
-                    "anti_addiction": True,
-                    "non_cloud": True,
-                    "high_login_rate": True,
-                    "no_friend_add": False,
-                    "allow_ranked": True,
-                },
-            },
-            "和平精英": {
-                "platforms": ["安卓", "苹果"],
-                "login_methods": ["微信", "QQ"],
-                "filters": {
-                    "no_deposit": True,
-                    "time_rental_bonus": True,
-                    "login_tool": True,
-                    "anti_addiction": True,
-                    "non_cloud": True,
-                    "high_login_rate": True,
-                    "no_friend_add": False,
-                    "allow_ranked": True,
-                },
-            },
-        },
-    }
-    saved = cfg.get("uhaozu_settings", {})
-    default.update(saved)
-    return default
+    return cfg.get("client_username", "")
 
 
-def save_uhaozu_settings(settings: dict) -> bool:
-    """保存U号租设置"""
+def save_client_username(username: str) -> bool:
+    """保存已登录的用户名"""
     cfg = load_config()
-    cfg["uhaozu_settings"] = settings
+    cfg["client_username"] = username
     return save_config(cfg)
 
 
-def get_default_uhaozu_account() -> Optional[dict]:
-    """获取默认U号租账号（密码已解密）"""
-    accounts = get_uhaozu_accounts()
-    for acc in accounts:
-        if acc.get("is_default"):
-            return acc
-    return accounts[0] if accounts else None
+def get_active_shops() -> list:
+    """获取已激活的店铺列表（含 shop_token）"""
+    cfg = load_config()
+    return cfg.get("active_shops", [])
 
 
-# ── 任务执行器相关配置 ─────────────────────────────────────────────────────────
+def save_active_shops(shops: list) -> bool:
+    """保存激活的店铺列表"""
+    cfg = load_config()
+    cfg["active_shops"] = shops
+    return save_config(cfg)
 
-# 默认值常量
-TASK_RUNNER_ENABLED = False
-TASK_RUNNER_POLL_INTERVAL = 2        # 轮询间隔（秒）
-TASK_RUNNER_HEARTBEAT_INTERVAL = 30  # 心跳间隔（秒）
 
-# 插件 ID 持久化文件路径
-PLUGIN_ID_FILE = os.path.join(CONFIG_DIR, "plugin_id.txt")
+def get_notify_enabled() -> bool:
+    """获取桌面通知开关"""
+    cfg = load_config()
+    return cfg.get("notify_enabled", True)
+
+
+def get_startup_enabled() -> bool:
+    """获取开机自启开关"""
+    cfg = load_config()
+    return cfg.get("startup_enabled", False)
+
+
+def is_logged_in() -> bool:
+    """检查是否已完成账号登录（有有效 client_token）"""
+    return bool(get_client_token())
+
+
+# ── 插件 ID 管理 ───────────────────────────────────────────────────────────────
 
 
 def get_plugin_id() -> str:
@@ -234,7 +129,6 @@ def get_plugin_id() -> str:
                     return plugin_id
         except Exception:
             pass
-    # 生成新的 plugin_id
     plugin_id = f"dskehuduan_{str(uuid.uuid4())[:8]}"
     try:
         with open(PLUGIN_ID_FILE, "w", encoding="utf-8") as f:
@@ -244,10 +138,10 @@ def get_plugin_id() -> str:
     return plugin_id
 
 
-def get_shop_token() -> str:
-    """获取店铺Token（X-Shop-Token请求头使用）"""
-    cfg = load_config()
-    return cfg.get("shop_token", "")
+# ── 任务执行器相关配置 ─────────────────────────────────────────────────────────
+
+# 默认启用状态
+TASK_RUNNER_ENABLED = False
 
 
 def get_task_runner_config() -> dict:
@@ -257,8 +151,6 @@ def get_task_runner_config() -> dict:
     return {
         "enabled": runner.get("enabled", TASK_RUNNER_ENABLED),
         "server_url": get_server_url(),
-        "shop_token": get_shop_token(),
-        "plugin_id": get_plugin_id(),
         "poll_interval": runner.get("poll_interval", TASK_RUNNER_POLL_INTERVAL),
         "heartbeat_interval": runner.get(
             "heartbeat_interval", TASK_RUNNER_HEARTBEAT_INTERVAL
@@ -266,7 +158,8 @@ def get_task_runner_config() -> dict:
     }
 
 
-def save_task_runner_config(enabled: bool, poll_interval: int = TASK_RUNNER_POLL_INTERVAL,
+def save_task_runner_config(enabled: bool,
+                            poll_interval: int = TASK_RUNNER_POLL_INTERVAL,
                             heartbeat_interval: int = TASK_RUNNER_HEARTBEAT_INTERVAL) -> bool:
     """保存任务执行器配置"""
     cfg_data = load_config()
@@ -276,3 +169,16 @@ def save_task_runner_config(enabled: bool, poll_interval: int = TASK_RUNNER_POLL
         "heartbeat_interval": heartbeat_interval,
     }
     return save_config(cfg_data)
+
+
+def get_default_uhaozu_account() -> Optional[dict]:
+    """
+    获取默认U号租账号。
+    v2.0 中账号列表从 aikefu 服务端获取，此处仅返回本地缓存的默认账号（兼容旧任务执行器）。
+    """
+    cfg = load_config()
+    accounts = cfg.get("uhaozu_accounts_cache", [])
+    for acc in accounts:
+        if acc.get("is_default"):
+            return acc
+    return accounts[0] if accounts else None
