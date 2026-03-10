@@ -9,6 +9,7 @@ aikefu 任务轮询执行器
   auto_exchange   — 自动换号（调用 UHaozuAutomation）
   handle_refund   — 退款处理（记录模式，目前为人工确认）
   auto_order      — 自动下单选号（预留，开发中）
+  transfer_human  — 转人工（调用 PddTransferHuman，自动转移拼多多会话给客服）
 
 轮询间隔：2秒（可配置）
 心跳间隔：30秒（保持插件在线状态）
@@ -24,13 +25,14 @@ logger = logging.getLogger(__name__)
 
 # 动作码 → 处理方法名映射表
 ACTION_HANDLERS = {
-    "auto_exchange": "_handle_auto_exchange",
-    "handle_refund": "_handle_refund",
-    "auto_order": "_handle_auto_order",
+    "auto_exchange": "_handle_auto_exchange",    # 自动换号
+    "handle_refund": "_handle_refund",           # 退款处理（人工确认）
+    "auto_order": "_handle_auto_order",          # 自动下单选号（预留）
+    "transfer_human": "_handle_transfer_human",  # 转人工（自动转移拼多多会话）
 }
 
 # 插件注册名称
-PLUGIN_NAME = "自动换号客户端"
+PLUGIN_NAME = "爱客服自动化客户端"
 
 # 已执行任务 ID 最大缓存数量（防止无限增长）
 MAX_EXECUTED_IDS = 2000
@@ -43,19 +45,24 @@ class AikefuTaskRunner:
     """
 
     def __init__(self, server_url: str, shop_token: str, plugin_id: str,
-                 poll_interval: int = 2, heartbeat_interval: int = 30):
+                 poll_interval: int = 2, heartbeat_interval: int = 30,
+                 shop_cookies: dict = None, shop_id: str = ""):
         """
         :param server_url:          aikefu 服务地址，如 http://8.145.43.255:6000
         :param shop_token:          店铺 Token（X-Shop-Token 请求头）
         :param plugin_id:           本客户端的插件唯一 ID（用于注册和心跳）
         :param poll_interval:       轮询间隔（秒），默认 2
         :param heartbeat_interval:  心跳间隔（秒），默认 30
+        :param shop_cookies:        拼多多登录后的 cookies 字典（用于 transfer_human）
+        :param shop_id:             店铺 ID（用于 round_robin 轮询隔离）
         """
         self.server_url = server_url
         self.shop_token = shop_token
         self.plugin_id = plugin_id
         self.poll_interval = poll_interval
         self.heartbeat_interval = heartbeat_interval
+        self.shop_cookies = shop_cookies or {}
+        self.shop_id = shop_id
 
         self._api = ServerAPI(base_url=server_url)
         self._running = False
@@ -307,6 +314,44 @@ class AikefuTaskRunner:
         """预留：自动下单选号（开发中）"""
         return {"success": False, "message": "auto_order 功能开发中"}
 
+    async def _handle_transfer_human(self, payload: dict) -> dict:
+        """
+        处理转人工任务，自动操作拼多多聊天页面将会话转移给客服。
+
+        payload 字段：
+          buyer_id  — 买家 ID（可选，用于定位会话）
+          order_sn  — 拼多多订单号（可选，优先用于定位会话）
+          order_id  — 内部订单 ID（可选，备用）
+          strategy  — 分配策略（first / random / least_busy / round_robin），
+                      不传则读取 config.get_transfer_strategy() 默认值
+
+        返回：{"success": bool, "agent": str, "message": str}
+        """
+        from channel.pinduoduo.pdd_transfer import PddTransferHuman
+
+        buyer_id = str(payload.get("buyer_id", ""))
+        order_sn = str(payload.get("order_sn", ""))
+        strategy = payload.get("strategy") or config.get_transfer_strategy()
+
+        if not self.shop_cookies:
+            return {
+                "success": False,
+                "agent": "",
+                "message": "未配置店铺 cookies，请先登录拼多多",
+            }
+
+        transfer = PddTransferHuman(
+            shop_id=self.shop_id,
+            cookies=self.shop_cookies,
+            strategy=strategy,
+        )
+        try:
+            result = await transfer.transfer(buyer_id=buyer_id, order_sn=order_sn)
+        finally:
+            await transfer.close()
+
+        return result
+
 
 # ===========================================================================
 # 多店铺任务执行器管理器（v2.0 新增）
@@ -319,18 +364,21 @@ class MultiShopTaskRunner:
     """
 
     def __init__(self, server_url: str, shops: list, poll_interval: int = 2,
-                 heartbeat_interval: int = 30):
+                 heartbeat_interval: int = 30, shop_cookies_map: dict = None):
         """
         :param server_url:          aikefu 服务地址
         :param shops:               激活的店铺列表，每项格式：
                                     {"id": 1, "name": "店铺名", "shop_token": "xxx"}
         :param poll_interval:       轮询间隔（秒），默认 2
         :param heartbeat_interval:  心跳间隔（秒），默认 30
+        :param shop_cookies_map:    各店铺登录 cookies，格式：{shop_id: cookies_dict}，
+                                    可为 None（向后兼容）
         """
         self.server_url = server_url
         self.shops = shops
         self.poll_interval = poll_interval
         self.heartbeat_interval = heartbeat_interval
+        self._shop_cookies_map: dict = shop_cookies_map or {}
 
         self._runners: dict = {}  # shop_id -> AikefuTaskRunner
         self._running = False
@@ -342,12 +390,15 @@ class MultiShopTaskRunner:
                 logger.warning("店铺 %s 没有 shop_token，跳过", shop.get("name", shop_id))
                 continue
             plugin_id = f"pdd_shop_{shop_id}"
+            cookies = self._shop_cookies_map.get(shop_id, {})
             runner = AikefuTaskRunner(
                 server_url=server_url,
                 shop_token=shop_token,
                 plugin_id=plugin_id,
                 poll_interval=poll_interval,
                 heartbeat_interval=heartbeat_interval,
+                shop_cookies=cookies,
+                shop_id=shop_id,
             )
             # 给 runner 附加店铺元信息，方便状态查询
             runner._shop_info = shop
@@ -386,11 +437,28 @@ class MultiShopTaskRunner:
         if runner:
             await runner.stop()
 
+    def update_shop_cookies(self, shop_id: str, cookies: dict):
+        """
+        更新指定店铺的登录 cookies（店铺重新登录后调用）。
+        同步更新内部 cookies 映射和对应 runner 的 shop_cookies。
+
+        :param shop_id:  店铺 ID（字符串）
+        :param cookies:  新的 cookies 字典 {name: value}
+        """
+        shop_id = str(shop_id)
+        self._shop_cookies_map[shop_id] = cookies
+        runner = self._runners.get(shop_id)
+        if runner:
+            runner.shop_cookies = cookies
+            logger.info("已更新店铺 %s 的 cookies", shop_id)
+        else:
+            logger.warning("店铺 %s 的执行器不存在，无法更新 cookies", shop_id)
+
     def get_status(self) -> list:
         """
         返回每个店铺执行器的状态列表。
         格式：[{"id": "1", "name": "店铺名", "plugin_id": "pdd_shop_1",
-                "running": True, "shop_token": "xxx"}]
+                "running": True, "shop_token": "xxx", "has_cookies": True}]
         """
         result = []
         for shop_id, runner in self._runners.items():
@@ -402,5 +470,6 @@ class MultiShopTaskRunner:
                 "running": runner._running,
                 "shop_token": runner.shop_token,
                 "platform": shop_info.get("platform", "pdd"),
+                "has_cookies": bool(runner.shop_cookies),
             })
         return result
