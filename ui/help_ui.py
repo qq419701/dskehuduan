@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextBrowser
 
 HELP_HTML = """
-<html><body style="font-family:微软雅黑,Arial,sans-serif;font-size:13px;color:#222;padding:16px;">
+<html><body style="font-family:微软雅黑,Arial,sans-serif;font-size:13px;color:#222;background-color:#ffffff;padding:16px;">
 
 <h2>📖 爱客服采集客户端 v2.0 帮助文档</h2>
 
@@ -116,10 +116,13 @@ class HelpPage(QWidget):
         layout.setSpacing(8)
 
         title = QLabel("📖 帮助文档")
-        title.setStyleSheet("font-size: 20px; font-weight: bold;")
+        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #222;")
         layout.addWidget(title)
 
         browser = QTextBrowser()
         browser.setOpenExternalLinks(True)
+        browser.setStyleSheet(
+            "QTextBrowser { background-color: #ffffff; color: #222222; border: 1px solid #e0e0e0; border-radius: 4px; }"
+        )
         browser.setHtml(HELP_HTML)
         layout.addWidget(browser)

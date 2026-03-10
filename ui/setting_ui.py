@@ -216,8 +216,9 @@ class SettingPage(QWidget):
             platform = shop.get('platform', 'pdd')
             platform_text = {'pdd': '拼多多', 'taobao': '淘宝', 'jd': '京东'}.get(platform, platform)
 
-            item = QListWidgetItem(f"{'✅' if shop_id in active_ids else '☐'}  {name}（{platform_text}）")
+            item = QListWidgetItem(f"{name}（{platform_text}）")
             item.setData(Qt.ItemDataRole.UserRole, shop)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(
                 Qt.CheckState.Checked if shop_id in active_ids else Qt.CheckState.Unchecked
             )
