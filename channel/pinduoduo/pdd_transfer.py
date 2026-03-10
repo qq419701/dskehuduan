@@ -50,7 +50,6 @@ class PddTransferHuman:
             return {"success": False, "agent": "", "message": str(e)}
 
     def _get_agent_list(self, sess):
-        # 真实接口: latitude/assign/getAssignCsList
         try:
             r = sess.post(
                 "https://mms.pinduoduo.com/latitude/assign/getAssignCsList",
@@ -80,16 +79,26 @@ class PddTransferHuman:
 
     def _do_transfer(self, sess, agent, buyer_id, order_sn, buyer_name):
         agent_uid = agent.get("uid", "")
-        agent_name = agent.get("name", "")
 
-        # 尝试多个转移接口
+        # 真实转移接口: plateau/chat/move_conversation (抓包确认)
+        # 同时带上 buyer_id 作为 uid
+        uid = buyer_id or ""
+
         attempts = [
+            {
+                "url": "https://mms.pinduoduo.com/plateau/chat/move_conversation",
+                "data": {
+                    "uid": uid,
+                    "to_cs_uid": agent_uid,
+                    "trans_reason": 10000,
+                },
+            },
             {
                 "url": "https://mms.pinduoduo.com/latitude/assign/transferConv",
                 "data": {
                     "toUid": agent_uid,
-                    "toBuyerId": buyer_id,
-                    "buyerId": buyer_id,
+                    "buyerId": uid,
+                    "toBuyerId": uid,
                     "orderSn": order_sn,
                     "buyerName": buyer_name,
                     "transReason": 10000,
@@ -99,17 +108,8 @@ class PddTransferHuman:
                 "url": "https://mms.pinduoduo.com/plateau/conv/transfer",
                 "data": {
                     "to_uid": agent_uid,
-                    "buyer_id": buyer_id,
+                    "buyer_id": uid,
                     "order_sn": order_sn,
-                },
-            },
-            {
-                "url": "https://mms.pinduoduo.com/chats/transferSession",
-                "data": {
-                    "staffId": agent_uid,
-                    "buyerId": buyer_id,
-                    "orderSn": order_sn,
-                    "buyerName": buyer_name,
                 },
             },
         ]
@@ -121,9 +121,10 @@ class PddTransferHuman:
                 if r.status_code == 200:
                     try:
                         resp = r.json()
-                        if (resp.get("success") or resp.get("result") is not None
-                                or resp.get("errorCode") in (0, 1000000)
-                                or resp.get("code") in (0, 200)):
+                        if (resp.get("success") or
+                                (isinstance(resp.get("result"), dict) and resp["result"].get("result") == "ok") or
+                                resp.get("errorCode") == 1000000 or
+                                resp.get("code") in (0, 200)):
                             return True
                     except Exception:
                         pass
