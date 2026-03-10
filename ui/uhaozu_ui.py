@@ -11,7 +11,7 @@ from datetime import datetime
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
     QGroupBox, QFormLayout, QTextEdit, QMessageBox, QScrollArea,
     QSizePolicy,
