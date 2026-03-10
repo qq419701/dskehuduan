@@ -224,18 +224,17 @@ class MainWindow(FluentWindow):
 
     def _start_task_runners(self):
         """根据配置启动多店铺任务执行器"""
-        runner_cfg = cfg.get_task_runner_config()
-        if not runner_cfg.get("enabled"):
-            return
-
         active_shops = cfg.get_active_shops()
         if not active_shops:
             logger.info("没有已激活的店铺，跳过任务执行器启动")
             return
 
+        runner_cfg = cfg.get_task_runner_config()
+        server_url = cfg.get_server_url()  # 读取用户设置的服务器地址
+
         from core.task_runner import MultiShopTaskRunner
         self._multi_runner = MultiShopTaskRunner(
-            server_url=runner_cfg["server_url"],
+            server_url=server_url,
             shops=active_shops,
             poll_interval=runner_cfg.get("poll_interval", cfg.TASK_RUNNER_POLL_INTERVAL),
             heartbeat_interval=runner_cfg.get("heartbeat_interval", cfg.TASK_RUNNER_HEARTBEAT_INTERVAL),
@@ -243,9 +242,17 @@ class MainWindow(FluentWindow):
         # 注入 runner 到插件状态页
         self.plugin_status_page.set_runner(self._multi_runner)
 
-        # 在后台 asyncio 任务中启动
+        # 用独立线程运行 asyncio event loop，不影响 Qt 主线程
+        import threading
+        runner = self._multi_runner  # 捕获引用，防止 lambda 闭包问题
         try:
-            asyncio.create_task(self._multi_runner.start_all())
+            t = threading.Thread(
+                target=lambda: asyncio.run(runner.start_all()),
+                daemon=True,
+            )
+            t.start()
+            logger.info("MultiShopTaskRunner 已在后台线程启动，server=%s，店铺数=%d",
+                        server_url, len(active_shops))
         except Exception as e:
             logger.warning("MultiShopTaskRunner 启动失败: %s", e)
 
@@ -301,6 +308,16 @@ class MainWindow(FluentWindow):
         self.server_api = ServerAPI(base_url=server_url)
         self.shop_page.load_shops()
         self.plugin_status_page.refresh()
+        # 重启任务执行器（使用新的服务器地址和店铺列表）
+        old_runner = self._multi_runner
+        self._multi_runner = None
+        if old_runner:
+            import threading
+            threading.Thread(
+                target=lambda: asyncio.run(old_runner.stop_all()),
+                daemon=True,
+            ).start()
+        self._start_task_runners()
 
     def closeEvent(self, event):
         event.ignore()
