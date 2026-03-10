@@ -216,7 +216,8 @@ class PddChannel(BaseChannel):
                 process_by=process_by, needs_human=needs_human, token_used=token_used or 0
             )
 
-        if reply and not needs_human and self.sender:
+        # process_by=plugin 时也发送立即回复话术
+        if reply and self.sender and (not needs_human or process_by == "plugin"):
             try:
                 await self.sender.send_text(buyer_id, reply)
                 if self.db_client:

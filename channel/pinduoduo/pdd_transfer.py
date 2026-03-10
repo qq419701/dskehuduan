@@ -53,15 +53,20 @@ class PddTransferHuman:
     # ------------------------------------------------------------------
 
     async def _ensure_browser(self, headless: bool = True):
-        """确保浏览器已启动并注入 cookies"""
+        """确保浏览器已启动并注入 cookies（普通模式，不占用 user_data_dir，避免和采集线程冲突）"""
         if self._browser is None:
             from playwright.async_api import async_playwright
             self._playwright = await async_playwright().start()
+            # 使用普通 launch（非 persistent），避免和 pdd_login 的 persistent context 抢同一目录
             self._browser = await self._playwright.chromium.launch(
                 headless=headless,
-                executable_path=self._get_chrome_path(),
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
             )
-            self._context = await self._browser.new_context()
+            self._context = await self._browser.new_context(
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            )
             if self.cookies:
                 cookie_list = [
                     {"name": k, "value": v, "domain": ".pinduoduo.com",
@@ -69,6 +74,9 @@ class PddTransferHuman:
                     for k, v in self.cookies.items()
                 ]
                 await self._context.add_cookies(cookie_list)
+                logger.info("已注入 %d 个cookies到转人工浏览器", len(self.cookies))
+            else:
+                logger.warning("转人工浏览器没有cookies，可能未登录！")
             self._page = await self._context.new_page()
 
     @staticmethod
@@ -127,8 +135,28 @@ class PddTransferHuman:
             else:
                 url = f"{CHAT_BASE_URL}#/"
             logger.info("打开拼多多聊天页面: %s", url)
-            await page.goto(url, wait_until="networkidle", timeout=30000)
-            await page.wait_for_timeout(2000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(3000)
+
+            # 检查是否被重定向到登录页（cookies失效）
+            cur_url = page.url
+            if "login" in cur_url or "verify" in cur_url or "passport" in cur_url:
+                logger.error("cookies已失效，被重定向到登录页: %s", cur_url)
+                return {"success": False, "agent": "", "message": "cookies已失效，请重新登录"}
+
+            # 关闭可能出现的登录/验证弹窗
+            for close_sel in ['[class*="dialog"] [class*="close"]', '[class*="modal"] [class*="close"]',
+                               'button:has-text("关闭")', 'button:has-text("取消")',
+                               '[class*="fullscreen-dialog"] button']:
+                try:
+                    el = await page.query_selector(close_sel)
+                    if el:
+                        await el.click()
+                        await page.wait_for_timeout(500)
+                        logger.info("已关闭弹窗: %s", close_sel)
+                        break
+                except Exception:
+                    continue
 
             # 2. 无 order_sn 时，通过搜索框或 data 属性定位买家会话
             if not order_sn:

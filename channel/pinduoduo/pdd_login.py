@@ -95,6 +95,14 @@ class PddLogin:
             raw = await ctx.cookies()
             self.cookies = {c["name"]: c["value"] for c in raw}
             logger.info("店铺 %s cookies: %d个", self.shop_id, len(self.cookies))
+            import json as _json
+            _cookies_path = os.path.join(user_data_dir, "aikefu_cookies.json")
+            try:
+                with open(_cookies_path, "w", encoding="utf-8") as _f:
+                    _json.dump(self.cookies, _f, ensure_ascii=False)
+                logger.info("店铺 %s cookies已保存: %s", self.shop_id, _cookies_path)
+            except Exception as _e:
+                logger.warning("保存cookies失败: %s", _e)
             await self._fetch_im_token(page)
             logger.info("店铺 %s im_token: [%s]", self.shop_id,
                        self.im_token[:30] if self.im_token else "未获取到!")

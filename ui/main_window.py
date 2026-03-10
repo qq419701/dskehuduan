@@ -39,6 +39,7 @@ class ChannelWorker(QThread):
 
     message_received = pyqtSignal(int, dict)  # shop_id, msg
     status_changed = pyqtSignal(int, bool)    # shop_id, is_running
+    cookies_ready = pyqtSignal(str, dict)     # shop_id, cookies
 
     def __init__(self, shop_info: dict, server_api: ServerAPI, parent=None):
         super().__init__(parent)
@@ -96,6 +97,8 @@ class ChannelWorker(QThread):
         self._channel.set_message_callback(on_message)
         self._channel.is_running = True
         self.status_changed.emit(shop_id, True)
+        # 登录成功后把 cookies 同步给 task_runner
+        self.cookies_ready.emit(str(shop_id), self._pdd_login.cookies)
 
         await self._channel.run_with_reconnect()
         self.status_changed.emit(shop_id, False)
@@ -239,11 +242,14 @@ class MainWindow(FluentWindow):
         server_url = cfg.get_server_url()  # 读取用户设置的服务器地址
 
         from core.task_runner import MultiShopTaskRunner
+        # 从浏览器持久化目录读取各店铺已保存的 cookies
+        shop_cookies_map = self._load_shop_cookies(active_shops)
         self._multi_runner = MultiShopTaskRunner(
             server_url=server_url,
             shops=active_shops,
             poll_interval=runner_cfg.get("poll_interval", cfg.TASK_RUNNER_POLL_INTERVAL),
             heartbeat_interval=runner_cfg.get("heartbeat_interval", cfg.TASK_RUNNER_HEARTBEAT_INTERVAL),
+            shop_cookies_map=shop_cookies_map,
         )
         # 注入 runner 到插件状态页
         self.plugin_status_page.set_runner(self._multi_runner)
@@ -277,6 +283,7 @@ class MainWindow(FluentWindow):
         worker = ChannelWorker(shop_info=shop_info, server_api=self.server_api, parent=self)
         worker.message_received.connect(self.message_page.add_message)
         worker.status_changed.connect(self._on_status_changed)
+        worker.cookies_ready.connect(self._on_shop_cookies_ready)
         self._workers[shop_id] = worker
         worker.start()
         logger.info("已启动店铺 %s 的采集线程", shop_id)
@@ -324,6 +331,33 @@ class MainWindow(FluentWindow):
                 daemon=True,
             ).start()
         self._start_task_runners()
+
+    def _load_shop_cookies(self, shops: list) -> dict:
+        """从持久化目录的 aikefu_cookies.json 读取已保存的 cookies（不启动浏览器，无冲突）"""
+        import os, json as _json
+        result = {}
+        browser_base = os.path.join(os.path.expanduser("~"), ".aikefu-client", "browser_data")
+        for shop in shops:
+            shop_id = str(shop.get("id", ""))
+            cookies_json = os.path.join(browser_base, f"shop_{shop_id}", "aikefu_cookies.json")
+            if os.path.exists(cookies_json):
+                try:
+                    with open(cookies_json, encoding="utf-8") as f:
+                        cookies = _json.load(f)
+                    if cookies:
+                        result[shop_id] = cookies
+                        logger.info("已读取店铺 %s 缓存cookies: %d个", shop_id, len(cookies))
+                except Exception as e:
+                    logger.warning("读取店铺 %s cookies失败: %s", shop_id, e)
+            else:
+                logger.warning("店铺 %s 无缓存cookies，请先启动采集登录", shop_id)
+        return result
+
+    def _on_shop_cookies_ready(self, shop_id: str, cookies: dict):
+        """店铺登录成功后更新 task_runner 的 cookies"""
+        if self._multi_runner and cookies:
+            self._multi_runner.update_shop_cookies(shop_id, cookies)
+            logger.info("已更新店铺 %s 的 cookies 到 task_runner", shop_id)
 
     def closeEvent(self, event):
         event.ignore()
