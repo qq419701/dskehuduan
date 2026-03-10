@@ -27,6 +27,7 @@ from ui.setting_ui import SettingPage
 from ui.uhaozu_ui import UHaozuPage
 from ui.plugin_status_ui import PluginStatusPage
 from ui.help_ui import HelpPage
+from ui.pdd_settings_ui import PddSettingsPage
 from core.server_api import ServerAPI
 import config as cfg
 
@@ -141,6 +142,7 @@ class MainWindow(FluentWindow):
         # 创建页面
         self.dashboard_page = DashboardPage()
         self.shop_page = ShopPage()
+        self.pdd_settings_page = PddSettingsPage()
         self.message_page = MessagePage()
         self.plugin_status_page = PluginStatusPage()
         self.uhaozu_page = UHaozuPage()
@@ -164,6 +166,7 @@ class MainWindow(FluentWindow):
 
         self.dashboard_page.setObjectName("dashboardPage")
         self.shop_page.setObjectName("shopPage")
+        self.pdd_settings_page.setObjectName("pddSettingsPage")
         self.message_page.setObjectName("messagePage")
         self.plugin_status_page.setObjectName("pluginStatusPage")
         self.uhaozu_page.setObjectName("uhaozuPage")
@@ -172,6 +175,7 @@ class MainWindow(FluentWindow):
 
         self.addSubInterface(self.dashboard_page, FluentIcon.HOME, "首页")
         self.addSubInterface(self.shop_page, FluentIcon.SHOPPING_CART, "拼多多店铺")
+        self.addSubInterface(self.pdd_settings_page, FluentIcon.SETTING, "拼多多设置")
         self.addSubInterface(self.message_page, FluentIcon.CHAT, "消息监控")
 
         # 插件状态图标
@@ -199,6 +203,7 @@ class MainWindow(FluentWindow):
         tabs = QTabWidget()
         tabs.addTab(self.dashboard_page, "首页")
         tabs.addTab(self.shop_page, "拼多多店铺")
+        tabs.addTab(self.pdd_settings_page, "拼多多设置")
         tabs.addTab(self.message_page, "消息监控")
         tabs.addTab(self.plugin_status_page, "🔌 插件状态")
         tabs.addTab(self.uhaozu_page, "U号租专区")

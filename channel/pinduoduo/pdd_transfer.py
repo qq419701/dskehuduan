@@ -15,12 +15,19 @@ import random
 import re
 from typing import Optional
 
+import config as cfg
+
 logger = logging.getLogger(__name__)
 
 # 轮询策略全局索引（按 shop_id 隔离）
 _round_robin_index: dict = {}
 
 CHAT_BASE_URL = "https://mms.pinduoduo.com/chat-merchant/index.html"
+
+
+def get_transfer_config() -> dict:
+    """从本地配置文件读取转人工设置（无配置时返回默认值）"""
+    return cfg.get_pdd_transfer_settings()
 
 
 class PddTransferHuman:
