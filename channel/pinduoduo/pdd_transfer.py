@@ -22,7 +22,7 @@ class PddTransferHuman:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Referer": "https://mms.pinduoduo.com/",
                 "Origin": "https://mms.pinduoduo.com",
-                "Content-Type": "application/x-www-form-urlencoded",
+                "Content-Type": "application/json",
             })
             for k, v in self.cookies.items():
                 self._session.cookies.set(k, v, domain=".pinduoduo.com")
@@ -50,62 +50,85 @@ class PddTransferHuman:
             return {"success": False, "agent": "", "message": str(e)}
 
     def _get_agent_list(self, sess):
-        urls = [
-            "https://mms.pinduoduo.com/assistant/staff/getOnlineStaffList",
-            "https://mms.pinduoduo.com/chats/getStaffList",
-            "https://mms.pinduoduo.com/assistant/staff/list",
-        ]
-        for url in urls:
-            try:
-                r = sess.post(url, data={}, timeout=10)
-                logger.info("客服列表接口 %s 响应: %s", url, r.text[:300])
-                if r.status_code == 200:
-                    data = r.json()
-                    items = (data.get("result") or data.get("data") or
-                             data.get("staffList") or data.get("list") or [])
-                    if isinstance(items, list) and items:
-                        agents = []
-                        for i, item in enumerate(items):
-                            name = (item.get("staffName") or item.get("name") or
-                                    item.get("nick") or item.get("username") or str(i))
-                            uid = (item.get("staffId") or item.get("id") or
-                                   item.get("uid") or item.get("userId") or "")
-                            agents.append({
-                                "name": name,
-                                "uid": str(uid),
-                                "unreplied": item.get("waitingCount", 0),
-                                "raw": item,
-                            })
-                        if agents:
-                            return agents
-            except Exception as e:
-                logger.warning("客服列表接口失败 %s: %s", url, e)
+        # 真实接口: latitude/assign/getAssignCsList
+        try:
+            r = sess.post(
+                "https://mms.pinduoduo.com/latitude/assign/getAssignCsList",
+                json={},
+                timeout=10
+            )
+            logger.info("客服列表接口响应: %s", r.text[:500])
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("success"):
+                    cs_map = (data.get("result") or {}).get("csList") or {}
+                    agents = []
+                    for uid_key, item in cs_map.items():
+                        name = (item.get("csName") or item.get("username") or item.get("nickname") or uid_key)
+                        uid = str(item.get("id") or uid_key)
+                        agents.append({
+                            "name": name,
+                            "uid": uid,
+                            "unreplied": item.get("unreplyNum", 0),
+                            "raw": item,
+                        })
+                    if agents:
+                        return agents
+        except Exception as e:
+            logger.warning("客服列表接口失败: %s", e)
         return None
 
     def _do_transfer(self, sess, agent, buyer_id, order_sn, buyer_name):
         agent_uid = agent.get("uid", "")
-        urls = [
-            "https://mms.pinduoduo.com/assistant/session/transfer",
-            "https://mms.pinduoduo.com/chats/transferSession",
-            "https://mms.pinduoduo.com/assistant/chat/transfer",
+        agent_name = agent.get("name", "")
+
+        # 尝试多个转移接口
+        attempts = [
+            {
+                "url": "https://mms.pinduoduo.com/latitude/assign/transferConv",
+                "data": {
+                    "toUid": agent_uid,
+                    "toBuyerId": buyer_id,
+                    "buyerId": buyer_id,
+                    "orderSn": order_sn,
+                    "buyerName": buyer_name,
+                    "transReason": 10000,
+                },
+            },
+            {
+                "url": "https://mms.pinduoduo.com/plateau/conv/transfer",
+                "data": {
+                    "to_uid": agent_uid,
+                    "buyer_id": buyer_id,
+                    "order_sn": order_sn,
+                },
+            },
+            {
+                "url": "https://mms.pinduoduo.com/chats/transferSession",
+                "data": {
+                    "staffId": agent_uid,
+                    "buyerId": buyer_id,
+                    "orderSn": order_sn,
+                    "buyerName": buyer_name,
+                },
+            },
         ]
-        data = {
-            "staffId": agent_uid,
-            "buyerId": buyer_id,
-            "orderSn": order_sn,
-            "buyerName": buyer_name,
-        }
-        for url in urls:
+
+        for attempt in attempts:
             try:
-                r = sess.post(url, data=data, timeout=10)
-                logger.info("转移接口 %s 响应: %s", url, r.text[:300])
+                r = sess.post(attempt["url"], json=attempt["data"], timeout=10)
+                logger.info("转移接口 %s 响应: %s", attempt["url"], r.text[:300])
                 if r.status_code == 200:
-                    resp = r.json()
-                    if (resp.get("success") or resp.get("result") is not None
-                            or resp.get("code") in (0, 200, "0", "200")):
-                        return True
+                    try:
+                        resp = r.json()
+                        if (resp.get("success") or resp.get("result") is not None
+                                or resp.get("errorCode") in (0, 1000000)
+                                or resp.get("code") in (0, 200)):
+                            return True
+                    except Exception:
+                        pass
             except Exception as e:
-                logger.warning("转移接���失败 %s: %s", url, e)
+                logger.warning("转移接口失败 %s: %s", attempt["url"], e)
         return False
 
     def _choose_agent(self, agents):
