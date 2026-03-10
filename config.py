@@ -182,3 +182,32 @@ def get_default_uhaozu_account() -> Optional[dict]:
         if acc.get("is_default"):
             return acc
     return accounts[0] if accounts else None
+
+
+# ── 转人工插件相关配置 ──────────────────────────────────────────────────────────
+
+
+def get_transfer_strategy() -> str:
+    """获取转人工分配策略，可选：first/random/least_busy/round_robin，默认 first"""
+    cfg = load_config()
+    return cfg.get("transfer_strategy", "first")
+
+
+def save_transfer_strategy(strategy: str) -> bool:
+    """保存转人工分配策略"""
+    cfg = load_config()
+    cfg["transfer_strategy"] = strategy
+    return save_config(cfg)
+
+
+def get_transfer_reply() -> str:
+    """获取转人工前发给买家的话术"""
+    cfg = load_config()
+    return cfg.get("transfer_reply", "稍等，正在为您转接人工客服，请稍候～")
+
+
+def save_transfer_reply(reply: str) -> bool:
+    """保存转人工话术"""
+    cfg = load_config()
+    cfg["transfer_reply"] = reply
+    return save_config(cfg)
