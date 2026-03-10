@@ -130,6 +130,11 @@ class PddChannel(BaseChannel):
         content = msg.get('content','')
         msg_type = msg.get('msg_type','text')
         image_url = msg.get('image_url','')
+        # 自动识别：content直接是图片URL时修正msg_type
+        if msg_type == 'text' and content.startswith(('https://chat-img.', 'http://chat-img.', 'https://img.')) and not image_url:
+            image_url = content
+            content = '[图片]'
+            msg_type = 'image'
         order_id = msg.get('order_id','')
 
         logger.info('店铺%s 买家%s[%s]: %s', self.shop_id, buyer_name or buyer_id, msg_type, content[:60])
