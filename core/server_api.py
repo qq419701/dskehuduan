@@ -30,6 +30,7 @@ class ServerAPI:
         buyer_name: str,
         content: str,
         order_id: str = "",
+        order_sn: str = "",
         msg_type: str = "text",
         image_url: str = "",
     ) -> dict:
@@ -43,6 +44,7 @@ class ServerAPI:
             "buyer_id": buyer_id,
             "buyer_name": buyer_name,
             "order_id": order_id or "",
+            "order_sn": order_sn or order_id or "",
             "content": content,
             "msg_type": msg_type,
             "image_url": image_url or "",
@@ -66,6 +68,7 @@ class ServerAPI:
         buyer_name: str,
         content: str,
         order_id: str = "",
+        order_sn: str = "",
         msg_type: str = "text",
         order_info: dict = None,
     ) -> dict:
@@ -80,6 +83,7 @@ class ServerAPI:
             "content": content,
             "msg_type": msg_type,
             "order_id": order_id or "",
+            "order_sn": order_sn or order_id or "",
             "order_info": order_info or {},
         }
         try:
