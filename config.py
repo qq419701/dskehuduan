@@ -186,6 +186,8 @@ def get_default_uhaozu_account() -> Optional[dict]:
 
 # ── 转人工插件相关配置 ──────────────────────────────────────────────────────────
 
+DEFAULT_TRANSFER_REPLY = "您好，正在为您转接人工客服，请稍候～"
+
 
 def get_transfer_strategy() -> str:
     """获取转人工分配策略，可选：first/random/least_busy/round_robin，默认 first"""
@@ -203,7 +205,7 @@ def save_transfer_strategy(strategy: str) -> bool:
 def get_transfer_reply() -> str:
     """获取转人工前发给买家的话术"""
     cfg = load_config()
-    return cfg.get("transfer_reply", "稍等，正在为您转接人工客服，请稍候～")
+    return cfg.get("transfer_reply", DEFAULT_TRANSFER_REPLY)
 
 
 def save_transfer_reply(reply: str) -> bool:
@@ -211,3 +213,29 @@ def save_transfer_reply(reply: str) -> bool:
     cfg = load_config()
     cfg["transfer_reply"] = reply
     return save_config(cfg)
+
+
+# ── 拼多多设置（统一配置入口）──────────────────────────────────────────────────
+
+
+def get_pdd_transfer_settings() -> dict:
+    """获取转人工设置（从 pdd_settings.transfer 字段读取，兼容旧配置）"""
+    conf = load_config()
+    pdd = conf.get("pdd_settings", {})
+    transfer = pdd.get("transfer", {})
+    # 兼容旧版顶层字段
+    return {
+        "strategy":       transfer.get("strategy", conf.get("transfer_strategy", "least_busy")),
+        "target_account": transfer.get("target_account", ""),
+        "reply":          transfer.get("reply", conf.get("transfer_reply", DEFAULT_TRANSFER_REPLY)),
+        "timeout":        transfer.get("timeout", 30),
+    }
+
+
+def save_pdd_transfer_settings(settings: dict) -> bool:
+    """保存转人工设置到 pdd_settings.transfer 字段"""
+    conf = load_config()
+    if "pdd_settings" not in conf:
+        conf["pdd_settings"] = {}
+    conf["pdd_settings"]["transfer"] = settings
+    return save_config(conf)
