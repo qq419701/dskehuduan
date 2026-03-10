@@ -206,3 +206,73 @@ def get_default_uhaozu_account() -> Optional[dict]:
         if acc.get("is_default"):
             return acc
     return accounts[0] if accounts else None
+
+
+# ── 任务执行器相关配置 ─────────────────────────────────────────────────────────
+
+# 默认值常量
+TASK_RUNNER_ENABLED = False
+TASK_RUNNER_POLL_INTERVAL = 2        # 轮询间隔（秒）
+TASK_RUNNER_HEARTBEAT_INTERVAL = 30  # 心跳间隔（秒）
+
+# 插件 ID 持久化文件路径
+PLUGIN_ID_FILE = os.path.join(CONFIG_DIR, "plugin_id.txt")
+
+
+def get_plugin_id() -> str:
+    """
+    获取本机插件唯一ID（首次生成并持久化到本地文件）
+    文件路径：~/.aikefu-client/plugin_id.txt
+    格式：dskehuduan_{uuid4前8位}
+    """
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    if os.path.exists(PLUGIN_ID_FILE):
+        try:
+            with open(PLUGIN_ID_FILE, "r", encoding="utf-8") as f:
+                plugin_id = f.read().strip()
+                if plugin_id:
+                    return plugin_id
+        except Exception:
+            pass
+    # 生成新的 plugin_id
+    plugin_id = f"dskehuduan_{str(uuid.uuid4())[:8]}"
+    try:
+        with open(PLUGIN_ID_FILE, "w", encoding="utf-8") as f:
+            f.write(plugin_id)
+    except Exception:
+        pass
+    return plugin_id
+
+
+def get_shop_token() -> str:
+    """获取店铺Token（X-Shop-Token请求头使用）"""
+    cfg = load_config()
+    return cfg.get("shop_token", "")
+
+
+def get_task_runner_config() -> dict:
+    """读取任务执行器配置"""
+    cfg = load_config()
+    runner = cfg.get("task_runner", {})
+    return {
+        "enabled": runner.get("enabled", TASK_RUNNER_ENABLED),
+        "server_url": get_server_url(),
+        "shop_token": get_shop_token(),
+        "plugin_id": get_plugin_id(),
+        "poll_interval": runner.get("poll_interval", TASK_RUNNER_POLL_INTERVAL),
+        "heartbeat_interval": runner.get(
+            "heartbeat_interval", TASK_RUNNER_HEARTBEAT_INTERVAL
+        ),
+    }
+
+
+def save_task_runner_config(enabled: bool, poll_interval: int = TASK_RUNNER_POLL_INTERVAL,
+                            heartbeat_interval: int = TASK_RUNNER_HEARTBEAT_INTERVAL) -> bool:
+    """保存任务执行器配置"""
+    cfg_data = load_config()
+    cfg_data["task_runner"] = {
+        "enabled": enabled,
+        "poll_interval": poll_interval,
+        "heartbeat_interval": heartbeat_interval,
+    }
+    return save_config(cfg_data)
