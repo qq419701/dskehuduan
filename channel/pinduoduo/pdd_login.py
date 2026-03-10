@@ -13,9 +13,10 @@ BROWSER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".aikefu-client", "brow
 
 
 class PddLogin:
-    def __init__(self, shop_id, db_client=None):
+    def __init__(self, shop_id, db_client=None, shop_token=None):
         self.shop_id = shop_id
         self.db_client = db_client
+        self.shop_token = shop_token
         self.cookies = {}
         self.im_token = ""
 
@@ -40,7 +41,6 @@ class PddLogin:
             await asyncio.sleep(3)
             logger.info("店铺 %s 当前URL: %s", self.shop_id, page.url)
 
-            # 等待用户完成登录和滑块验证，直到稳定停留在非login页面
             logger.info("店铺 %s 等待用户完成登录/验证（最多5分钟）...", self.shop_id)
             try:
                 await page.wait_for_function(
@@ -51,19 +51,17 @@ class PddLogin:
                     }""",
                     timeout=300000
                 )
-                await asyncio.sleep(3)
-                logger.info("店铺 %s 登录/验证完成，URL: %s", self.shop_id, page.url)
+                await asyncio.sleep(15)
+                logger.info("店铺 %s 登录完成，URL: %s", self.shop_id, page.url)
             except Exception as e:
                 logger.error("店铺 %s 等待超时: %s", self.shop_id, e)
                 await ctx.close()
                 return False
 
-            # 获取 cookies
             raw = await ctx.cookies()
             self.cookies = {c["name"]: c["value"] for c in raw}
             logger.info("店铺 %s cookies: %d个", self.shop_id, len(self.cookies))
 
-            # 获取 im_token
             await self._fetch_im_token(page)
             logger.info("店铺 %s im_token: [%s]", self.shop_id,
                        self.im_token[:30] if self.im_token else "未获取到!")
