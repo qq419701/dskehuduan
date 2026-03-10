@@ -1,22 +1,41 @@
 ﻿# -*- coding: utf-8 -*-
-import asyncio
-import json
-import logging
-import os
-import requests
+import asyncio, json, logging, os, shutil, requests
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
-
 PDD_LOGIN_URL = "https://mms.pinduoduo.com/"
 BROWSER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".aikefu-client", "browser_data")
 
+COUNTDOWN_JS = """
+(shopName) => {
+    if (document.getElementById('aikefu-tip')) return;
+    let seconds = 15;
+    const box = document.createElement('div');
+    box.id = 'aikefu-tip';
+    box.style.cssText = 'position:fixed;top:16px;right:16px;z-index:999999;background:#27ae60;color:#fff;padding:16px 22px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.3);font-size:15px;font-family:sans-serif;min-width:220px;text-align:center;';
+    box.innerHTML = `<div style="font-size:13px;margin-bottom:6px;">✅ 登录成功！</div>
+        <div style="font-size:13px;margin-bottom:10px;">正在保存【${shopName}】登录信息</div>
+        <div id="aikefu-count" style="font-size:36px;font-weight:bold;margin-bottom:10px;">${seconds}</div>
+        <div style="font-size:12px;margin-bottom:10px;">秒后自动保存关闭</div>
+        <button id="aikefu-close-btn" style="background:#fff;color:#27ae60;border:none;border-radius:5px;padding:6px 18px;font-size:13px;cursor:pointer;font-weight:bold;">立即保存并关闭</button>`;
+    document.body.appendChild(box);
+    window._aikefu_close = false;
+    document.getElementById('aikefu-close-btn').onclick = () => { window._aikefu_close = true; };
+    const timer = setInterval(() => {
+        seconds--;
+        const el = document.getElementById('aikefu-count');
+        if (el) el.textContent = seconds;
+        if (seconds <= 0) { clearInterval(timer); window._aikefu_close = true; }
+    }, 1000);
+}
+"""
 
 class PddLogin:
-    def __init__(self, shop_id, db_client=None, shop_token=None):
+    def __init__(self, shop_id, db_client=None, shop_token=None, shop_name=None):
         self.shop_id = shop_id
         self.db_client = db_client
         self.shop_token = shop_token
+        self.shop_name = shop_name or f"店铺{shop_id}"
         self.cookies = {}
         self.im_token = ""
 
@@ -25,9 +44,16 @@ class PddLogin:
         os.makedirs(d, exist_ok=True)
         return d
 
+    def clear_browser_data(self):
+        d = os.path.join(BROWSER_DATA_DIR, f"shop_{self.shop_id}")
+        if os.path.exists(d):
+            shutil.rmtree(d)
+            logger.info("已清空店铺 %s 浏览器缓存", self.shop_id)
+        os.makedirs(d, exist_ok=True)
+
     async def login(self, username="", password=""):
         user_data_dir = self.get_user_data_dir()
-        logger.info("店铺 %s 开始登录流程", self.shop_id)
+        logger.info("店铺 %s(%s) 开始登录流程", self.shop_id, self.shop_name)
         async with async_playwright() as pw:
             ctx = await pw.chromium.launch_persistent_context(
                 user_data_dir,
@@ -38,10 +64,10 @@ class PddLogin:
             )
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
             await page.goto(PDD_LOGIN_URL, timeout=30000)
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
             logger.info("店铺 %s 当前URL: %s", self.shop_id, page.url)
+            logger.info("请在弹出的浏览器中登录【%s】的拼多多账号（最多等5分钟）", self.shop_name)
 
-            logger.info("店铺 %s 等待用户完成登录/验证（最多5分钟）...", self.shop_id)
             try:
                 await page.wait_for_function(
                     """() => {
@@ -51,8 +77,16 @@ class PddLogin:
                     }""",
                     timeout=300000
                 )
-                await asyncio.sleep(15)
-                logger.info("店铺 %s 登录完成，URL: %s", self.shop_id, page.url)
+                logger.info("店铺 %s 登录成功，显示倒计时提示", self.shop_id)
+                # 注入倒计时悬浮框
+                await page.evaluate(COUNTDOWN_JS, self.shop_name)
+                # 等待用户点击关闭或倒计时结束（最多20秒）
+                for _ in range(20):
+                    await asyncio.sleep(1)
+                    done = await page.evaluate("() => window._aikefu_close === true")
+                    if done:
+                        break
+                logger.info("店铺 %s 倒计时结束，保存登录信息", self.shop_id)
             except Exception as e:
                 logger.error("店铺 %s 等待超时: %s", self.shop_id, e)
                 await ctx.close()
@@ -61,19 +95,16 @@ class PddLogin:
             raw = await ctx.cookies()
             self.cookies = {c["name"]: c["value"] for c in raw}
             logger.info("店铺 %s cookies: %d个", self.shop_id, len(self.cookies))
-
             await self._fetch_im_token(page)
             logger.info("店铺 %s im_token: [%s]", self.shop_id,
                        self.im_token[:30] if self.im_token else "未获取到!")
-
             await ctx.close()
 
         if not self.im_token:
             logger.warning("店铺 %s 尝试用requests获取token", self.shop_id)
             await self._fetch_im_token_by_requests()
 
-        logger.info("店铺 %s 登录流程完成, im_token=%s",
-                   self.shop_id, "成功" if self.im_token else "失败")
+        logger.info("店铺 %s 登录完成 im_token=%s", self.shop_id, "成功" if self.im_token else "失败")
         return True
 
     async def _fetch_im_token(self, page):

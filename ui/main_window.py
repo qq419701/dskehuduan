@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 主窗口（v2.0）
 启动流程：检查 client_token → 无则弹出登录弹窗 → 登录成功后进入主界面。
@@ -69,6 +69,7 @@ class ChannelWorker(QThread):
             shop_id=shop_id,
             db_client=None,
             shop_token=shop_token,
+            shop_name=self.shop_info.get("name", ""),
         )
         success = await self._pdd_login.login()
         if not success:
@@ -328,3 +329,5 @@ class MainWindow(FluentWindow):
             QSystemTrayIcon.MessageIcon.Information,
             3000,
         )
+
+
