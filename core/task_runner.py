@@ -306,3 +306,101 @@ class AikefuTaskRunner:
     async def _handle_auto_order(self, payload: dict) -> dict:
         """预留：自动下单选号（开发中）"""
         return {"success": False, "message": "auto_order 功能开发中"}
+
+
+# ===========================================================================
+# 多店铺任务执行器管理器（v2.0 新增）
+# ===========================================================================
+
+class MultiShopTaskRunner:
+    """
+    多店铺任务执行器管理器。
+    为每个激活的店铺创建独立的 AikefuTaskRunner 实例，并发运行。
+    """
+
+    def __init__(self, server_url: str, shops: list, poll_interval: int = 2,
+                 heartbeat_interval: int = 30):
+        """
+        :param server_url:          aikefu 服务地址
+        :param shops:               激活的店铺列表，每项格式：
+                                    {"id": 1, "name": "店铺名", "shop_token": "xxx"}
+        :param poll_interval:       轮询间隔（秒），默认 2
+        :param heartbeat_interval:  心跳间隔（秒），默认 30
+        """
+        self.server_url = server_url
+        self.shops = shops
+        self.poll_interval = poll_interval
+        self.heartbeat_interval = heartbeat_interval
+
+        self._runners: dict = {}  # shop_id -> AikefuTaskRunner
+        self._running = False
+
+        for shop in shops:
+            shop_id = str(shop.get("id", ""))
+            shop_token = shop.get("shop_token", "")
+            if not shop_token:
+                logger.warning("店铺 %s 没有 shop_token，跳过", shop.get("name", shop_id))
+                continue
+            plugin_id = f"pdd_shop_{shop_id}"
+            runner = AikefuTaskRunner(
+                server_url=server_url,
+                shop_token=shop_token,
+                plugin_id=plugin_id,
+                poll_interval=poll_interval,
+                heartbeat_interval=heartbeat_interval,
+            )
+            # 给 runner 附加店铺元信息，方便状态查询
+            runner._shop_info = shop
+            self._runners[shop_id] = runner
+
+    async def start_all(self):
+        """并发启动所有店铺的任务执行器"""
+        if not self._runners:
+            logger.info("MultiShopTaskRunner: 没有配置任何店铺")
+            return
+        self._running = True
+        logger.info("MultiShopTaskRunner: 并发启动 %d 个店铺执行器", len(self._runners))
+        await asyncio.gather(
+            *(runner.start() for runner in self._runners.values()),
+            return_exceptions=True,
+        )
+
+    async def stop_all(self):
+        """停止所有执行器"""
+        self._running = False
+        await asyncio.gather(
+            *(runner.stop() for runner in self._runners.values()),
+            return_exceptions=True,
+        )
+        logger.info("MultiShopTaskRunner: 所有执行器已停止")
+
+    async def start_shop(self, shop_id: str):
+        """单独启动某个店铺的执行器"""
+        runner = self._runners.get(str(shop_id))
+        if runner:
+            asyncio.create_task(runner.start())
+
+    async def stop_shop(self, shop_id: str):
+        """单独停止某个店铺的执行器"""
+        runner = self._runners.get(str(shop_id))
+        if runner:
+            await runner.stop()
+
+    def get_status(self) -> list:
+        """
+        返回每个店铺执行器的状态列表。
+        格式：[{"id": "1", "name": "店铺名", "plugin_id": "pdd_shop_1",
+                "running": True, "shop_token": "xxx"}]
+        """
+        result = []
+        for shop_id, runner in self._runners.items():
+            shop_info = getattr(runner, "_shop_info", {})
+            result.append({
+                "id": shop_id,
+                "name": shop_info.get("name", shop_id),
+                "plugin_id": runner.plugin_id,
+                "running": runner._running,
+                "shop_token": runner.shop_token,
+                "platform": shop_info.get("platform", "pdd"),
+            })
+        return result

@@ -1,192 +1,160 @@
 # -*- coding: utf-8 -*-
 """
-首次运行配置界面 - 配置MySQL连接信息
+账号登录弹窗（v2.0）
+用 aikefu 后台账号密码登录，登录成功后将 client_token 保存到本地配置。
+原来的 MySQL 配置弹窗已被此界面完全替代。
 """
-import json
-
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QFormLayout, QMessageBox, QWidget,
+    QDialog, QVBoxLayout, QFormLayout, QHBoxLayout,
+    QLabel, QLineEdit, QPushButton, QMessageBox,
 )
 
 import config as cfg
-from core.encrypt import encrypt_password
-from core.db_client import DBClient
+from core.server_api import ServerAPI
 
 
-class ConnectionTestThread(QThread):
-    """后台线程测试数据库连接"""
-    result = pyqtSignal(bool, str)
+class LoginThread(QThread):
+    """后台线程执行登录请求，避免 UI 卡顿"""
+    result = pyqtSignal(bool, str, str, str)  # success, client_token, username, error_msg
 
-    def __init__(self, host, port, database, user, password):
+    def __init__(self, server_url: str, username: str, password: str):
         super().__init__()
-        self.host = host
-        self.port = port
-        self.database = database
-        self.user = user
-        self.password = password
+        self._server_url = server_url
+        self._username = username
+        self._password = password
 
     def run(self):
-        try:
-            client = DBClient(self.host, self.port, self.database, self.user, self.password)
-            ok = client.test_connection()
-            if ok:
-                self.result.emit(True, "连接成功！")
-            else:
-                self.result.emit(False, "连接失败，请检查配置")
-        except Exception as e:
-            self.result.emit(False, f"连接失败: {e}")
+        api = ServerAPI(base_url=self._server_url)
+        data = api.client_login(self._username, self._password)
+        if data.get("success"):
+            self.result.emit(
+                True,
+                data.get("client_token", ""),
+                data.get("username", self._username),
+                "",
+            )
+        else:
+            self.result.emit(False, "", "", data.get("error", "登录失败，请检查账号密码"))
 
 
-class SetupDialog(QDialog):
-    """首次运行配置弹窗 - 填写MySQL连接信息"""
+class LoginDialog(QDialog):
+    """账号密码登录弹窗"""
 
-    setup_done = pyqtSignal()
+    login_success = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("爱客服采集客户端 - 初始配置")
-        self.setFixedSize(460, 400)
+        self.setWindowTitle(f"🤖 {cfg.APP_NAME} v{cfg.APP_VERSION} - 登录")
+        self.setFixedSize(420, 320)
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
-        self._test_thread = None
+        self._login_thread = None
         self._init_ui()
-        self._load_existing()
+        self._load_saved()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(30, 20, 30, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(36, 24, 36, 24)
+        layout.setSpacing(14)
 
-        title = QLabel("配置MySQL数据库连接")
+        # 标题
+        title = QLabel(f"🤖 {cfg.APP_NAME} v{cfg.APP_VERSION}")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px;")
+        title.setStyleSheet("font-size: 17px; font-weight: bold; margin-bottom: 6px;")
         layout.addWidget(title)
 
-        desc = QLabel(
-            "请填写 aikefu 服务器的MySQL数据库连接信息。\n"
-            "密码将加密存储在本地配置文件中。"
-        )
-        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        desc.setStyleSheet("color: #666; font-size: 12px;")
-        layout.addWidget(desc)
-
+        # 表单
         form = QFormLayout()
         form.setSpacing(10)
 
-        self.host_edit = QLineEdit(cfg.MYSQL_CONFIG["host"])
-        self.port_edit = QLineEdit(str(cfg.MYSQL_CONFIG["port"]))
-        self.database_edit = QLineEdit(cfg.MYSQL_CONFIG["database"])
-        self.user_edit = QLineEdit()
-        self.user_edit.setPlaceholderText("数据库用户名")
-        self.password_edit = QLineEdit()
-        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_edit.setPlaceholderText("数据库密码")
-        self.server_url_edit = QLineEdit(cfg.AIKEFU_SERVER)
-        self.server_url_edit.setPlaceholderText("http://8.145.43.255:6000")
+        self.server_edit = QLineEdit()
+        self.server_edit.setPlaceholderText("http://8.145.43.255:5000")
+        form.addRow("服务器地址:", self.server_edit)
 
-        form.addRow("MySQL 主机:", self.host_edit)
-        form.addRow("MySQL 端口:", self.port_edit)
-        form.addRow("数据库名:", self.database_edit)
-        form.addRow("用户名:", self.user_edit)
-        form.addRow("密码:", self.password_edit)
-        form.addRow("服务器地址:", self.server_url_edit)
+        self.user_edit = QLineEdit()
+        self.user_edit.setPlaceholderText("用户名")
+        form.addRow("用    户:", self.user_edit)
+
+        self.pass_edit = QLineEdit()
+        self.pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pass_edit.setPlaceholderText("密码")
+        self.pass_edit.returnPressed.connect(self._do_login)
+        form.addRow("密    码:", self.pass_edit)
 
         layout.addLayout(form)
 
-        # 状态标签
+        # 状态提示
         self.status_label = QLabel("")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setStyleSheet("color: #e74c3c; font-size: 12px;")
         layout.addWidget(self.status_label)
 
-        # 按钮区域
-        btn_layout = QHBoxLayout()
-        self.test_btn = QPushButton("测试连接")
-        self.save_btn = QPushButton("保存并开始")
-        self.save_btn.setDefault(True)
-
-        self.test_btn.clicked.connect(self._test_connection)
-        self.save_btn.clicked.connect(self._save_and_accept)
-
-        btn_layout.addWidget(self.test_btn)
-        btn_layout.addWidget(self.save_btn)
-        layout.addLayout(btn_layout)
-
-    def _load_existing(self):
-        """加载已有配置"""
-        existing = cfg.load_config()
-        mysql = existing.get("mysql", {})
-        if mysql.get("host"):
-            self.host_edit.setText(mysql["host"])
-        if mysql.get("port"):
-            self.port_edit.setText(str(mysql["port"]))
-        if mysql.get("database"):
-            self.database_edit.setText(mysql["database"])
-        if mysql.get("user"):
-            self.user_edit.setText(mysql["user"])
-        if existing.get("server_url"):
-            self.server_url_edit.setText(existing["server_url"])
-
-    def _get_form_data(self) -> dict:
-        return {
-            "host": self.host_edit.text().strip(),
-            "port": int(self.port_edit.text().strip() or "3306"),
-            "database": self.database_edit.text().strip(),
-            "user": self.user_edit.text().strip(),
-            "password": self.password_edit.text(),
-        }
-
-    def _test_connection(self):
-        """测试数据库连接"""
-        data = self._get_form_data()
-        if not data["user"]:
-            self._set_status("请填写用户名", "red")
-            return
-
-        self.test_btn.setEnabled(False)
-        self._set_status("连接中...", "blue")
-
-        self._test_thread = ConnectionTestThread(
-            data["host"], data["port"], data["database"],
-            data["user"], data["password"]
+        # 登录按钮
+        self.login_btn = QPushButton("🔗 登录")
+        self.login_btn.setFixedHeight(36)
+        self.login_btn.setDefault(True)
+        self.login_btn.setStyleSheet(
+            "QPushButton{background:#1890ff;color:white;border:none;border-radius:4px;font-size:14px;}"
+            "QPushButton:hover{background:#40a9ff;}"
+            "QPushButton:pressed{background:#096dd9;}"
+            "QPushButton:disabled{background:#b0c4de;}"
         )
-        self._test_thread.result.connect(self._on_test_result)
-        self._test_thread.start()
+        self.login_btn.clicked.connect(self._do_login)
+        layout.addWidget(self.login_btn)
 
-    def _on_test_result(self, success: bool, message: str):
-        self.test_btn.setEnabled(True)
-        color = "green" if success else "red"
-        self._set_status(message, color)
+        # 说明文字
+        hint = QLabel("ℹ️ 使用 aikefu 后台的账号密码登录")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(hint)
 
-    def _set_status(self, text: str, color: str = "black"):
-        self.status_label.setText(text)
-        self.status_label.setStyleSheet(f"color: {color};")
+    def _load_saved(self):
+        """加载上次保存的服务器地址"""
+        self.server_edit.setText(cfg.get_server_url())
+        self.user_edit.setText(cfg.get_client_username())
 
-    def _save_and_accept(self):
-        """保存配置并关闭对话框"""
-        data = self._get_form_data()
-        if not data["user"]:
-            QMessageBox.warning(self, "提示", "请填写数据库用户名")
+    def _do_login(self):
+        server_url = self.server_edit.text().strip() or cfg.AIKEFU_SERVER
+        username = self.user_edit.text().strip()
+        password = self.pass_edit.text()
+
+        if not username:
+            self._show_error("请填写用户名")
+            return
+        if not password:
+            self._show_error("请填写密码")
             return
 
-        # 加密密码
-        try:
-            enc_password = encrypt_password(data["password"]) if data["password"] else ""
-        except Exception:
-            enc_password = ""
+        self.login_btn.setEnabled(False)
+        self.status_label.setText("登录中...")
+        self.status_label.setStyleSheet("color: #1890ff; font-size: 12px;")
 
-        config_data = cfg.load_config()
-        config_data["mysql"] = {
-            "host": data["host"],
-            "port": data["port"],
-            "database": data["database"],
-            "user": data["user"],
-            "password_enc": enc_password,
-        }
-        config_data["server_url"] = self.server_url_edit.text().strip() or cfg.AIKEFU_SERVER
+        # 保存服务器地址
+        cfg_data = cfg.load_config()
+        cfg_data["server_url"] = server_url
+        cfg.save_config(cfg_data)
 
-        if cfg.save_config(config_data):
-            self.setup_done.emit()
+        self._login_thread = LoginThread(server_url, username, password)
+        self._login_thread.result.connect(self._on_login_result)
+        self._login_thread.start()
+
+    def _on_login_result(self, success: bool, client_token: str, username: str, error_msg: str):
+        self.login_btn.setEnabled(True)
+        if success:
+            cfg.save_client_token(client_token)
+            cfg.save_client_username(username)
+            self.status_label.setStyleSheet("color: #27ae60; font-size: 12px;")
+            self.status_label.setText(f"✅ 登录成功！欢迎 {username}")
+            self.login_success.emit()
             self.accept()
         else:
-            QMessageBox.critical(self, "错误", "保存配置失败，请检查磁盘空间")
+            self._show_error(error_msg or "登录失败，请检查账号密码或服务器地址")
+
+    def _show_error(self, msg: str):
+        self.status_label.setStyleSheet("color: #e74c3c; font-size: 12px;")
+        self.status_label.setText(f"❌ {msg}")
+
+
+# 保持向后兼容：原来 app.py 使用 SetupDialog
+SetupDialog = LoginDialog
+
