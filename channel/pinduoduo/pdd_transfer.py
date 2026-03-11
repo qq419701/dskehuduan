@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+'# -*- coding: utf-8 -*-
 # pdd_transfer.py - 纯 HTTP API 版本，不启动任何浏览器
 # 直接用 cookies 调用拼多多接口转移会话
 import logging
@@ -137,39 +137,68 @@ class PddTransferHuman:
         return agents
 
     def _parse_agents_from_data(self, data: dict) -> list:
-        """从接口响应中解析客服列表，兼容多种字段名"""
+        """从接口响应中解析客服列表，兼容多种字段名和数据结构"""
+        # 打印完整原始响应，用于排查字段名
+        logger.info("[transfer] 原始接口响应（完整）: %s", str(data)[:2000])
+
         result = data.get("result") or {}
+        logger.info("[transfer] result字段类型=%s 内容=%s", type(result).__name__, str(result)[:1000])
+
         cs_map = None
+
+        # 情形1：result 本身是列表
         if isinstance(result, list):
             cs_map = result
-        else:
-            for field in ("csList", "staffList", "onlineList", "list"):
+            logger.info("[transfer] result 是列表，直接用，长度=%d", len(result))
+        # 情形2：result 是 dict，且包含已知的客服列表字段
+        elif isinstance(result, dict):
+            for field in ("csList", "staffList", "onlineList", "list", "csInfoList", "agentList", "data"):
                 if result.get(field) is not None:
                     cs_map = result[field]
+                    logger.info("[transfer] 从 result.%s 取到客服数据，类型=%s 内容=%s",
+                                field, type(cs_map).__name__, str(cs_map)[:500])
                     break
+            # 情形3：result 本身就是以 csid 为 key 的 dict（如 {"cs_xxx": {...}, "cs_yyy": {...}}）
+            if cs_map is None and result:
+                logger.info("[transfer] result 无已知列表字段，尝试把 result 整体作为 csid->info 字典使用")
+                cs_map = result
+
+        # 情形4：顶层 data 直接有列表字段（不通过 result 中转）
+        if cs_map is None:
+            for field in ("csList", "staffList", "onlineList", "list", "csInfoList", "agentList", "data"):
+                if data.get(field) is not None:
+                    cs_map = data[field]
+                    logger.info("[transfer] 从顶层 data.%s 取到客服数据", field)
+                    break
+
         if cs_map is None:
             cs_map = {}
+            logger.warning("[transfer] 无法从响应中找到客服列表，响应结构: %s", list(data.keys()))
 
+        # 将 list 转换为 dict（以索引为 key）
         if isinstance(cs_map, list):
             cs_map = {str(i): item for i, item in enumerate(cs_map)}
 
         agents = []
         if isinstance(cs_map, dict):
             for uid_key, item in cs_map.items():
+                if not isinstance(item, dict):
+                    continue
                 name = (item.get("csName") or item.get("username") or
                         item.get("nickname") or item.get("staffName") or
                         item.get("name") or uid_key)
                 uid = str(item.get("id") or item.get("uid") or uid_key)
                 csid = uid_key
-                # 兼容拼多多所有可能的备注字段名
+                # 兼容拼多多所有可能的备注字段名（完整枚举）
                 remark = (item.get("remarkName") or item.get("remark") or
                           item.get("memo") or item.get("tag") or
                           item.get("comment") or item.get("note") or
                           item.get("csRemark") or item.get("label") or
-                          item.get("alias") or item.get("mark") or "")
-                # 打印完整原始数据，用于排查备注字段名
-                logger.info("[transfer] 客服原始数据: uid_key=%s name=%s remark=%s 全部字段=%s",
-                            uid_key, name, remark, item)
+                          item.get("alias") or item.get("mark") or
+                          item.get("description") or item.get("desc") or "")
+                # 打印每个客服的完整原始字段，便于排查
+                logger.info("[transfer] 客服#%s 解析结果: name=%s remark=%s uid=%s 所有字段=%s",
+                            uid_key, name, remark, uid, item)
                 agents.append({
                     "name": name,
                     "uid": uid,
@@ -178,6 +207,10 @@ class PddTransferHuman:
                     "remark": remark,
                     "raw": item,
                 })
+        else:
+            logger.warning("[transfer] cs_map 不是 dict，类型=%s", type(cs_map).__name__) 
+
+        logger.info("[transfer] 共解析到 %d 个客服", len(agents))
         return agents
 
     def _try_agent_list_v1(self, sess: requests.Session):
@@ -187,7 +220,7 @@ class PddTransferHuman:
         try:
             anti = cfg.get_anti_content(self.shop_id)
             r = sess.post(url, json={"wechatCheck": True, "anti_content": anti}, timeout=15)
-            logger.info("客服列表接口v1响应 [%d]: %s", r.status_code, r.text[:800])
+            logger.info("客服列表接口v1响应 [%d]: %s", r.status_code, r.text[:2000])
             if r.status_code != 200:
                 logger.warning("[transfer] 客服列表v1接口返回非200: %d", r.status_code)
                 return None
@@ -200,7 +233,7 @@ class PddTransferHuman:
             logger.info("[transfer] v1接口解析到 %d 个客服", len(agents))
             if agents:
                 return agents
-            logger.warning("客服列表v1为空，接口原始数据: %s", str(data)[:500])
+            logger.warning("客服列表v1为空，接口原始数据: %s", str(data)[:1000])
             return []
         except Exception as e:
             logger.warning("客服列表v1接口失败: %s", e)
@@ -211,7 +244,7 @@ class PddTransferHuman:
         url = "https://mms.pinduoduo.com/mms/api/cs/online_list"
         try:
             r = sess.get(url, timeout=15)
-            logger.info("客服列表接口v2响应 [%d]: %s", r.status_code, r.text[:800])
+            logger.info("客服列表接口v2响应 [%d]: %s", r.status_code, r.text[:2000])
             if r.status_code != 200:
                 return None
             data = r.json()
@@ -230,7 +263,7 @@ class PddTransferHuman:
         url = "https://mms.pinduoduo.com/service/im/cs/list"
         try:
             r = sess.get(url, timeout=15)
-            logger.info("客服列表接口v3响应 [%d]: %s", r.status_code, r.text[:800])
+            logger.info("客服列表接口v3响应 [%d]: %s", r.status_code, r.text[:2000])
             if r.status_code != 200:
                 return None
             data = r.json()
@@ -363,7 +396,7 @@ class PddTransferHuman:
         return False
 
     # ------------------------------------------------------------------
-    # 策略选择（支持定向指定客服）
+    # 策略选择（支持定向指定客服，按昵称或备注匹配）
     # ------------------------------------------------------------------
 
     def _choose_agent(self, agents: list, target_agent: str = ""):
@@ -374,7 +407,7 @@ class PddTransferHuman:
                 name_match = target_agent in a.get("name", "")
                 remark_match = target_agent in a.get("remark", "")
                 if name_match or remark_match:
-                    logger.info("[transfer] 指定客服匹配: name=%s remark=%s (关键词=%s)",
+                    logger.info("[transfer] 指定客服匹配成功: name=%s remark=%s (关键词=%s)",
                                 a.get("name"), a.get("remark"), target_agent)
                     return a
             logger.warning("[transfer] 未找到指定客服 '%s'（昵称和备注均未命中），回退到策略选择", target_agent)
@@ -407,3 +440,4 @@ class PddTransferHuman:
             except Exception:
                 pass
             self._session = None
+'
