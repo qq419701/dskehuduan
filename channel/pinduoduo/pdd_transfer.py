@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # pdd_transfer.py - 纯 HTTP API 版本，不启动任何浏览器
 # 直接用 cookies 调用拼多多接口转移会话
 import logging
@@ -53,6 +53,7 @@ class PddTransferHuman:
         return self._session
 
     def refresh_anti_content(self):
+        """刷新 anti_content 到当前 session 的请求头。"""
         import config as cfg
         anti = cfg.get_anti_content(self.shop_id)
         if self._session:
@@ -61,6 +62,7 @@ class PddTransferHuman:
         return anti
 
     def reset_session(self):
+        """重置并关闭当前 session。"""
         if self._session:
             try:
                 self._session.close()
@@ -96,13 +98,13 @@ class PddTransferHuman:
                 return {"success": False, "agent": "", "message": "没有可用客服"}
 
             logger.info("[transfer] 可用客服列表: %s",
-                        [(a.get("name"), a.get("remark"), a.get("csid")) for a in agents])
+                        [(a.get("name"), a.get("csid"), a.get("remark")) for a in agents])
 
             chosen = self._choose_agent(agents, target_agent=target_agent)
             if not chosen:
                 return {"success": False, "agent": "", "message": "策略未能选出客服"}
-            logger.info("[transfer] 选中客服: name=%s remark=%s csid=%s uid=%s",
-                        chosen.get("name"), chosen.get("remark"), chosen.get("csid"), chosen.get("uid"))
+            logger.info("[transfer] 选中客服: name=%s csid=%s uid=%s",
+                        chosen.get("name"), chosen.get("csid"), chosen.get("uid"))
 
             success = self._do_transfer(sess, chosen, buyer_id, order_sn, buyer_name)
             if not success:
@@ -123,86 +125,97 @@ class PddTransferHuman:
             return {"success": False, "agent": "", "message": str(e)}
 
     # ------------------------------------------------------------------
-    # 获取客服列表（多接口依次尝试）
+    # 获取客服列表（多接口依次尝试）—— 修复：v1空列表时继续尝试v2/v3
     # ------------------------------------------------------------------
 
     def _get_agent_list(self, sess: requests.Session):
+        """
+        依次尝试多个接口获取可接收转移的客服列表，任一成功且非空即返回。
+        返回 None = 所有接口均异常，返回 [] = 接口正常但无客服。
+        """
+        last_empty = False
+
+        # 接口1
         agents = self._try_agent_list_v1(sess)
-        if agents is not None:
+        if agents is not None and len(agents) > 0:
             return agents
+        if agents is not None:
+            last_empty = True
+
+        # 接口2
         agents = self._try_agent_list_v2(sess)
-        if agents is not None:
+        if agents is not None and len(agents) > 0:
             return agents
+        if agents is not None:
+            last_empty = True
+
+        # 接口3
         agents = self._try_agent_list_v3(sess)
-        return agents
+        if agents is not None and len(agents) > 0:
+            return agents
+        if agents is not None:
+            last_empty = True
+
+        return [] if last_empty else None
 
     def _parse_agents_from_data(self, data: dict) -> list:
-        """从接口响应中解析客服列表，兼容多种字段名和数据结构"""
-        logger.info("[transfer] 原始接口响应（完整）: %s", str(data)[:2000])
-
+        """从接口响应中解析客服列表，兼容多种字段名和结构"""
         result = data.get("result") or {}
-        logger.info("[transfer] result字段类型=%s 内容=%s", type(result).__name__, str(result)[:1000])
+
+        # ★ 修复：result 本身可能就是 {csid_key: {...}} 格式的客服字典
+        #    判断依据：dict 的 key 以 "cs_" 开头，或 value 包含 csName/username
+        if isinstance(result, dict) and result:
+            first_val = next(iter(result.values()), None)
+            if isinstance(first_val, dict) and (
+                "csName" in first_val or "username" in first_val or
+                "staffName" in first_val or "nickname" in first_val
+            ):
+                cs_map = result
+                logger.info("[transfer] result 本身就是客服字典，共 %d 个 key", len(cs_map))
+                return self._build_agents_from_map(cs_map)
 
         cs_map = None
-
         if isinstance(result, list):
             cs_map = result
-            logger.info("[transfer] result 是列表，直接用，长度=%d", len(result))
-        elif isinstance(result, dict):
-            for field in ("csList", "staffList", "onlineList", "list", "csInfoList", "agentList", "data"):
+        else:
+            for field in ("csList", "staffList", "onlineList", "list"):
                 if result.get(field) is not None:
                     cs_map = result[field]
-                    logger.info("[transfer] 从 result.%s 取到客服数据，类型=%s 内容=%s",
-                                field, type(cs_map).__name__, str(cs_map)[:500])
                     break
-            if cs_map is None and result:
-                logger.info("[transfer] result 无已知列表字段，尝试把 result 整体作为 csid->info 字典使用")
-                cs_map = result
-
-        if cs_map is None:
-            for field in ("csList", "staffList", "onlineList", "list", "csInfoList", "agentList", "data"):
-                if data.get(field) is not None:
-                    cs_map = data[field]
-                    logger.info("[transfer] 从顶层 data.%s 取到客服数据", field)
-                    break
-
         if cs_map is None:
             cs_map = {}
-            logger.warning("[transfer] 无法从响应中找到客服列表，响应结构: %s", list(data.keys()))
 
         if isinstance(cs_map, list):
             cs_map = {str(i): item for i, item in enumerate(cs_map)}
 
-        agents = []
-        if isinstance(cs_map, dict):
-            for uid_key, item in cs_map.items():
-                if not isinstance(item, dict):
-                    continue
-                name = (item.get("csName") or item.get("username") or
-                        item.get("nickname") or item.get("staffName") or
-                        item.get("name") or uid_key)
-                uid = str(item.get("id") or item.get("uid") or uid_key)
-                csid = uid_key
-                remark = (item.get("remarkName") or item.get("remark") or
-                          item.get("memo") or item.get("tag") or
-                          item.get("comment") or item.get("note") or
-                          item.get("csRemark") or item.get("label") or
-                          item.get("alias") or item.get("mark") or
-                          item.get("description") or item.get("desc") or "")
-                logger.info("[transfer] 客服#%s 解析结果: name=%s remark=%s uid=%s 所有字段=%s",
-                            uid_key, name, remark, uid, item)
-                agents.append({
-                    "name": name,
-                    "uid": uid,
-                    "csid": csid,
-                    "unreplied": item.get("unreplyNum", 0),
-                    "remark": remark,
-                    "raw": item,
-                })
-        else:
-            logger.warning("[transfer] cs_map 不是 dict，类型=%s", type(cs_map).__name__) 
+        return self._build_agents_from_map(cs_map)
 
-        logger.info("[transfer] 共解析到 %d 个客服", len(agents))
+    def _build_agents_from_map(self, cs_map: dict) -> list:
+        """把 {uid_key: item} 字典转为 agents 列表"""
+        agents = []
+        if not isinstance(cs_map, dict):
+            return agents
+        for uid_key, item in cs_map.items():
+            if not isinstance(item, dict):
+                continue
+            name = (item.get("csName") or item.get("username") or
+                    item.get("nickname") or item.get("staffName") or
+                    item.get("name") or uid_key)
+            uid = str(item.get("id") or item.get("uid") or uid_key)
+            csid = uid_key
+            remark = (item.get("remark") or item.get("remarkName") or
+                      item.get("memo") or item.get("tag") or
+                      item.get("comment") or item.get("note") or
+                      item.get("csRemark") or item.get("label") or "")
+            logger.info("[transfer] 客服原始数据完整字段: uid_key=%s, ALL_KEYS=%s, FULL=%s", uid_key, list(item.keys()), item)
+            agents.append({
+                "name": name,
+                "uid": uid,
+                "csid": csid,
+                "unreplied": item.get("unreplyNum", 0),
+                "remark": remark,
+                "raw": item,
+            })
         return agents
 
     def _try_agent_list_v1(self, sess: requests.Session):
@@ -212,7 +225,7 @@ class PddTransferHuman:
         try:
             anti = cfg.get_anti_content(self.shop_id)
             r = sess.post(url, json={"wechatCheck": True, "anti_content": anti}, timeout=15)
-            logger.info("客服列表接口v1响应 [%d]: %s", r.status_code, r.text[:2000])
+            logger.info("客服列表接口v1响应 [%d]: %s", r.status_code, r.text[:800])
             if r.status_code != 200:
                 logger.warning("[transfer] 客服列表v1接口返回非200: %d", r.status_code)
                 return None
@@ -223,10 +236,7 @@ class PddTransferHuman:
                 return None
             agents = self._parse_agents_from_data(data)
             logger.info("[transfer] v1接口解析到 %d 个客服", len(agents))
-            if agents:
-                return agents
-            logger.warning("客服列表v1为空，接口原始数据: %s", str(data)[:1000])
-            return []
+            return agents
         except Exception as e:
             logger.warning("客服列表v1接口失败: %s", e)
             return None
@@ -236,7 +246,7 @@ class PddTransferHuman:
         url = "https://mms.pinduoduo.com/mms/api/cs/online_list"
         try:
             r = sess.get(url, timeout=15)
-            logger.info("客服列表接口v2响应 [%d]: %s", r.status_code, r.text[:2000])
+            logger.info("客服列表接口v2响应 [%d]: %s", r.status_code, r.text[:800])
             if r.status_code != 200:
                 return None
             data = r.json()
@@ -245,7 +255,7 @@ class PddTransferHuman:
                 return None
             agents = self._parse_agents_from_data(data)
             logger.info("[transfer] v2接口解析到 %d 个客服", len(agents))
-            return agents if agents else []
+            return agents
         except Exception as e:
             logger.warning("客服列表v2接口失败: %s", e)
             return None
@@ -255,7 +265,7 @@ class PddTransferHuman:
         url = "https://mms.pinduoduo.com/service/im/cs/list"
         try:
             r = sess.get(url, timeout=15)
-            logger.info("客服列表接口v3响应 [%d]: %s", r.status_code, r.text[:2000])
+            logger.info("客服列表接口v3响应 [%d]: %s", r.status_code, r.text[:800])
             if r.status_code != 200:
                 return None
             data = r.json()
@@ -264,7 +274,7 @@ class PddTransferHuman:
                 return None
             agents = self._parse_agents_from_data(data)
             logger.info("[transfer] v3接口解析到 %d 个客服", len(agents))
-            return agents if agents else []
+            return agents
         except Exception as e:
             logger.warning("客服列表v3接口失败: %s", e)
             return None
@@ -383,12 +393,12 @@ class PddTransferHuman:
                     except (ValueError, KeyError):
                         return True
             except Exception as e:
-                logger.warning("转移接口失败 %s: %s", url, e)
+                logger.warning("转移���口失败 %s: %s", url, e)
 
         return False
 
     # ------------------------------------------------------------------
-    # 策略选择（支持定向指定客服，按昵称或备注匹配）
+    # 策略选择（支持定向指定客服）—— 修复：匹配失败时打印候选客服名字
     # ------------------------------------------------------------------
 
     def _choose_agent(self, agents: list, target_agent: str = ""):
@@ -399,10 +409,16 @@ class PddTransferHuman:
                 name_match = target_agent in a.get("name", "")
                 remark_match = target_agent in a.get("remark", "")
                 if name_match or remark_match:
-                    logger.info("[transfer] 指定客服匹配成功: name=%s remark=%s (关键词=%s)",
+                    logger.info("[transfer] 指定客服匹配: name=%s remark=%s (关键词=%s)",
                                 a.get("name"), a.get("remark"), target_agent)
                     return a
-            logger.warning("[transfer] 未找到指定客服 '%s'（昵称和备注均未命中），回退到策略选择", target_agent)
+            # ★ 修复：打印所有候选客服名字，方便用户知道该填什么
+            all_names = [(a.get("name"), a.get("remark")) for a in agents]
+            logger.warning(
+                "[transfer] 未找到指定客服 '%s'（昵称和备注均未命中），回退到策略选择。"
+                "当前所有候选客服(name, remark): %s",
+                target_agent, all_names
+            )
         sub_agents = [a for a in agents if a.get("csid", "").startswith("cs_")]
         if sub_agents:
             candidates = sub_agents
@@ -419,10 +435,10 @@ class PddTransferHuman:
             chosen = candidates[idx % len(candidates)]
             _round_robin_index[self.shop_id] = (idx + 1) % len(candidates)
             return chosen
-        return candidates[0]  # first（默认）
+        return candidates[0]
 
     # ------------------------------------------------------------------
-    # 关闭（保持 async 兼容旧接口）
+    # 关闭
     # ------------------------------------------------------------------
 
     async def close(self):
@@ -432,3 +448,4 @@ class PddTransferHuman:
             except Exception:
                 pass
             self._session = None
+

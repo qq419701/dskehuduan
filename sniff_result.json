@@ -1,0 +1,14 @@
+[
+  {
+    "type": "request",
+    "url": "https://mms.pinduoduo.com/carson/api/remote/mc/transfer/button/show",
+    "body": "{}",
+    "time": "19:15:44"
+  },
+  {
+    "type": "response",
+    "url": "https://mms.pinduoduo.com/carson/api/remote/mc/transfer/button/show",
+    "body": "{\"success\":true,\"errorCode\":1000000,\"errorMsg\":null,\"result\":false}",
+    "time": "19:15:44"
+  }
+]

@@ -1,240 +1,158 @@
 # -*- coding: utf-8 -*-
 """
-sniff2.py  —  拼多多商家后台 API 抓包工具
-用途：注入已保存的 cookies，打开有头浏览器，监听并记录所有与"转人工"相关的 HTTP 请求。
-
-使用方法：
-  cd C:\Users\Administrator\Desktop\dskehuduan
-  python sniff2.py
-
-脚本会：
-1. 读取本地 pdd_cookies.json（同目录）或 config.json 中的 cookies
-2. 打开有头 Chromium，进入拼多多商家聊天页面
-3. 实时打印捕获到的 API 请求 / 响应
-4. 把所有结果写入 sniff_result.json，方便复查
-
-你在浏览器里手动操作"转移会话"，脚本就会抓到真实接口。
-按 Ctrl+C 退出，结果自动保存。
+sniff2.py — 自动抓取 anti_content 并保存到配置文件
+使用方法：python sniff2.py
+脚本会自动打开浏览器 → 你登录拼多多 → 随便点几下 → 自动保存 anti_content
 """
-
-import asyncio
-import json
-import logging
-import os
-import sys
-import time
+import asyncio, json, time, sys
 from pathlib import Path
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-logger = logging.getLogger(__name__)
+BASE = Path(__file__).parent
+OUTPUT_FILE = BASE / "sniff_result.json"
+captured = []
+anti_content_found = [""]   # 用列表让闭包可修改
 
-# ── 关键词过滤（包含任意一个就记录）──────────────────────────────────────────
-KEYWORDS = [
-    "transfer", "move_conversation", "assign", "conv",
-    "chat", "session", "csList", "staffList", "latitude",
-    "plateau", "chats", "assistant",
-]
 
-# ── 输出文件 ──────────────────────────────────────────────────────────────────
-OUTPUT_FILE = Path(__file__).parent / "sniff_result.json"
-
-captured: list = []
-
-def _load_cookies() -> dict:
-    """
-    按优先级读取 cookies：
-    1. 同目录 pdd_cookies.json
-    2. config.json -> pdd_settings.cookies 或 shop_cookies
-    """
-    base = Path(__file__).parent
-
-    # 1) 独立 cookies 文件
-    ck_file = base / "pdd_cookies.json"
-    if ck_file.exists():
-        try:
-            data = json.loads(ck_file.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data:
-                logger.info("从 pdd_cookies.json 读取到 %d 个 cookies", len(data))
-                return data
-        except Exception as e:
-            logger.warning("读取 pdd_cookies.json 失败: %s", e)
-
-    # 2) config.json
-    cfg_file = base / "config.json"
-    if cfg_file.exists():
-        try:
-            cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
-            # 尝试多个路径
-            for path in [
-                ["pdd_settings", "cookies"],
-                ["shop_cookies"],
-                ["cookies"],
-            ]:
-                obj = cfg
-                for key in path:
-                    obj = obj.get(key, {}) if isinstance(obj, dict) else {}
-                if isinstance(obj, dict) and obj:
-                    logger.info("从 config.json[%s] 读取到 %d 个 cookies",
-                                ".".join(path), len(obj))
-                    return obj
-        except Exception as e:
-            logger.warning("读取 config.json 失败: %s", e)
-
-    logger.warning("未找到任何 cookies！浏览器将以未登录状态打开，请手动登录后再操作转移。")
-    return {}
-
-def _is_interesting(url: str) -> bool:
-    url_lower = url.lower()
-    return any(kw in url_lower for kw in KEYWORDS)
-
-async def _handle_request(request):
-    """拦截请求，过滤并记录"""
-    url = request.url
-    if not _is_interesting(url):
-        return
-
+def _save_anti_content(anti: str):
+    """把抓到的 anti_content 写入 pdd_config.json，同时兼容 config.py 的读取格式"""
+    cfg_file = BASE / "pdd_config.json"
     try:
-        post_data = request.post_data or ""
+        cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
     except Exception:
-        post_data = ""
+        cfg = {}
 
-    entry = {
-        "type": "request",
-        "ts": time.strftime("%H:%M:%S"),
-        "method": request.method,
-        "url": url,
-        "headers": dict(request.headers),
-        "body": post_data,
-    }
-    captured.append(entry)
+    # 写顶层（config.py get_anti_content 读这里）
+    cfg["anti_content"] = anti
+    cfg["anti_content_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    logger.info(
-        "\n%s\n▶ REQUEST  %s %s\n  Body: %s",
-        "=" * 70,
-        request.method,
-        url,
-        post_data[:500] if post_data else "(empty)",
-    )
+    # 同时写入所有 shop_x 子项（如果有）
+    for key in list(cfg.keys()):
+        if key.startswith("shop_") and isinstance(cfg[key], dict):
+            cfg[key]["anti_content"] = anti
 
-async def _handle_response(response):
-    """拦截响应，过滤并记录"""
-    url = response.url
-    if not _is_interesting(url):
-        return
+    cfg_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n✅ anti_content 已自动保存到: {cfg_file}")
+    print(f"   长度: {len(anti)} 字符，前30字: {anti[:30]}...")
 
-    try:
-        body = await response.text()
-    except Exception:
-        body = "(无法读取响应体)"
-
-    entry = {
-        "type": "response",
-        "ts": time.strftime("%H:%M:%S"),
-        "status": response.status,
-        "url": url,
-        "body": body[:2000],
-    }
-    captured.append(entry)
-
-    logger.info(
-        "◀ RESPONSE [%d] %s\n  Body: %s",
-        response.status,
-        url,
-        body[:800],
-    )
-
-
-def _save_results():
-    try:
-        OUTPUT_FILE.write_text(
-            json.dumps(captured, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        logger.info("结果已保存到 %s（共 %d 条）", OUTPUT_FILE, len(captured))
-    except Exception as e:
-        logger.error("保存结果失败: %s", e)
 
 async def main():
-    from playwright.async_api import async_playwright
+    print("=" * 60)
+    print("  拼多多 anti_content 自动抓取工具")
+    print("=" * 60)
+    print("步骤：")
+    print("  1. 等待浏览器自动打开")
+    print("  2. 如未登录，请在浏览器里登录拼多多商家后台")
+    print("  3. 随便点几下页面（不需要点转移会话）")
+    print("  4. 看到「✅ anti_content 已自动保存」就成功了")
+    print("  5. 按 Ctrl+C 退出，重启 app.py 即可")
+    print("=" * 60)
 
-    cookies_dict = _load_cookies()
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        print("\n❌ 缺少 playwright，正在自动安装...")
+        import subprocess
+        subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+        from playwright.async_api import async_playwright
 
-    logger.info("启动有头浏览器……")
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
+        # 用持久化上下文，保留登录状态
+        user_data = BASE / "browser_data" / "sniff_profile"
+        user_data.mkdir(parents=True, exist_ok=True)
+
+        ctx = await pw.chromium.launch_persistent_context(
+            str(user_data),
             headless=False,
-            args=[
-                "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--start-maximized",
-            ],
-        )
-        context = await browser.new_context(
-            viewport=None,          # 最大化窗口
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
             locale="zh-CN",
-            timezone_id="Asia/Shanghai",
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
         )
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
 
-        # 注入 cookies
-        if cookies_dict:
-            cookie_list = [
-                {
-                    "name": k, "value": v,
-                    "domain": ".pinduoduo.com",
-                    "path": "/",
-                    "httpOnly": False,
-                    "secure": True,
-                }
-                for k, v in cookies_dict.items()
-            ]
-            await context.add_cookies(cookie_list)
-            logger.info("已注入 %d 个 cookies", len(cookie_list))
-        else:
-            logger.info("无 cookies，请在浏览器中手动登录")
+        async def on_request(request):
+            url = request.url
+            if "pinduoduo" not in url:
+                return
+            if request.resource_type not in ("xhr", "fetch", "document"):
+                return
 
-        page = await context.new_page()
+            # ★ 核心：从每个请求的 Headers 里提取 anti_content
+            if not anti_content_found[0]:
+                headers = request.headers
+                anti = (headers.get("anti-content", "")
+                        or headers.get("Anti-Content", "")
+                        or headers.get("ANTI-CONTENT", ""))
+                if anti and len(anti) > 20:
+                    anti_content_found[0] = anti
+                    _save_anti_content(anti)
 
-        # 监听请求 / 响应
-        page.on("request",  lambda req:  asyncio.ensure_future(_handle_request(req)))
-        page.on("response", lambda resp: asyncio.ensure_future(_handle_response(resp)))
+            # 记录转移相关接口
+            if any(k in url for k in ("move_conversation", "transfer", "assign", "csList")):
+                try:
+                    body = request.post_data or ""
+                    print(f"\n[请求] {request.method} {url}")
+                    if body:
+                        print(f"  Body: {body[:200]}")
+                    captured.append({"type": "request", "url": url, "body": body,
+                                     "time": time.strftime("%H:%M:%S")})
+                except Exception:
+                    pass
 
-        logger.info("正在打开拼多多商家聊天页面……")
-        await page.goto(
-            "https://mms.pinduoduo.com/chat-merchant/index.html#/"
-            , wait_until="domcontentloaded",
-            timeout=60000,
-        )
+        async def on_response(response):
+            url = response.url
+            if "pinduoduo" not in url:
+                return
+            if response.request.resource_type not in ("xhr", "fetch"):
+                return
+            if any(k in url for k in ("move_conversation", "transfer", "assign", "csList")):
+                try:
+                    text = await response.text()
+                    print(f"\n[响应] {url}")
+                    print(f"  {text[:300]}")
+                    captured.append({"type": "response", "url": url, "body": text[:500],
+                                     "time": time.strftime("%H:%M:%S")})
+                except Exception:
+                    pass
 
-        logger.info(
-            "\n%s\n"
-            "  ✅ 浏览器已就绪！\n"
-            "  请在浏览器中手动操作"转移会话"，脚本会实时打印捕获到的 API。\n"
-            "  按 Ctrl+C 退出，结果自动保存到 sniff_result.json\n"
-            "%s",
-            "=" * 70, "=" * 70,
-        )
+        page.on("request", on_request)
+        page.on("response", on_response)
 
-        try:
-            # 保持运行，等待用户手动操作
-            while True:
-                await asyncio.sleep(1)
-        except KeyboardInterrupt:
-            logger.info("用户中断，正在保存结果……")
-        finally:
-            _save_results()
-            await browser.close()
+        print("\n🌐 正在打开浏览器...")
+        await page.goto("https://mms.pinduoduo.com/home/", timeout=30000)
+        print("✅ 浏览器已打开，请在浏览器里操作（等待180秒）")
+
+        # 每隔10秒提示一次状态
+        for i in range(18):
+            await asyncio.sleep(10)
+            remaining = 180 - (i + 1) * 10
+            if anti_content_found[0]:
+                print(f"  [{time.strftime('%H:%M:%S')}] anti_content ✅ 已保存 | 还剩 {remaining}s | 按 Ctrl+C 可提前退出")
+            else:
+                print(f"  [{time.strftime('%H:%M:%S')}] 等待抓取 anti_content... | 还剩 {remaining}s | 请点击页面触发请求")
+
+        await ctx.close()
+
+    # 保存抓包结果
+    OUTPUT_FILE.write_text(json.dumps(captured, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print("\n" + "=" * 60)
+    print("=== 抓包完成 ===")
+    if anti_content_found[0]:
+        print(f"anti_content : ✅ 已自动保存到 pdd_config.json")
+    else:
+        print(f"anti_content : ❌ 未抓到（请重新运行，登录后多点几下页面）")
+    print(f"转移接口     : 抓到 {len(captured)} 条")
+    print(f"详细结果     : {OUTPUT_FILE}")
+    print("=" * 60)
+
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        _save_results()
+        OUTPUT_FILE.write_text(json.dumps(captured, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("\n\n用户退出。")
+        if anti_content_found[0]:
+            print("✅ anti_content 已保存，重启 app.py 即可！")
+        else:
+            print("❌ 未抓到 anti_content，请重试。")
