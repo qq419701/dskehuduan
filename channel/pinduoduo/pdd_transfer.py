@@ -1,4 +1,4 @@
-'# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # pdd_transfer.py - 纯 HTTP API 版本，不启动任何浏览器
 # 直接用 cookies 调用拼多多接口转移会话
 import logging
@@ -138,7 +138,6 @@ class PddTransferHuman:
 
     def _parse_agents_from_data(self, data: dict) -> list:
         """从接口响应中解析客服列表，兼容多种字段名和数据结构"""
-        # 打印完整原始响应，用于排查字段名
         logger.info("[transfer] 原始接口响应（完整）: %s", str(data)[:2000])
 
         result = data.get("result") or {}
@@ -146,11 +145,9 @@ class PddTransferHuman:
 
         cs_map = None
 
-        # 情形1：result 本身是列表
         if isinstance(result, list):
             cs_map = result
             logger.info("[transfer] result 是列表，直接用，长度=%d", len(result))
-        # 情形2：result 是 dict，且包含已知的客服列表字段
         elif isinstance(result, dict):
             for field in ("csList", "staffList", "onlineList", "list", "csInfoList", "agentList", "data"):
                 if result.get(field) is not None:
@@ -158,12 +155,10 @@ class PddTransferHuman:
                     logger.info("[transfer] 从 result.%s 取到客服数据，类型=%s 内容=%s",
                                 field, type(cs_map).__name__, str(cs_map)[:500])
                     break
-            # 情形3：result 本身就是以 csid 为 key 的 dict（如 {"cs_xxx": {...}, "cs_yyy": {...}}）
             if cs_map is None and result:
                 logger.info("[transfer] result 无已知列表字段，尝试把 result 整体作为 csid->info 字典使用")
                 cs_map = result
 
-        # 情形4：顶层 data 直接有列表字段（不通过 result 中转）
         if cs_map is None:
             for field in ("csList", "staffList", "onlineList", "list", "csInfoList", "agentList", "data"):
                 if data.get(field) is not None:
@@ -175,7 +170,6 @@ class PddTransferHuman:
             cs_map = {}
             logger.warning("[transfer] 无法从响应中找到客服列表，响应结构: %s", list(data.keys()))
 
-        # 将 list 转换为 dict（以索引为 key）
         if isinstance(cs_map, list):
             cs_map = {str(i): item for i, item in enumerate(cs_map)}
 
@@ -189,14 +183,12 @@ class PddTransferHuman:
                         item.get("name") or uid_key)
                 uid = str(item.get("id") or item.get("uid") or uid_key)
                 csid = uid_key
-                # 兼容拼多多所有可能的备注字段名（完整枚举）
                 remark = (item.get("remarkName") or item.get("remark") or
                           item.get("memo") or item.get("tag") or
                           item.get("comment") or item.get("note") or
                           item.get("csRemark") or item.get("label") or
                           item.get("alias") or item.get("mark") or
                           item.get("description") or item.get("desc") or "")
-                # 打印每个客服的完整原始字段，便于排查
                 logger.info("[transfer] 客服#%s 解析结果: name=%s remark=%s uid=%s 所有字段=%s",
                             uid_key, name, remark, uid, item)
                 agents.append({
@@ -440,4 +432,3 @@ class PddTransferHuman:
             except Exception:
                 pass
             self._session = None
-'
