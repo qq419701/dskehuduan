@@ -1,25 +1,13 @@
 # -*- coding: utf-8 -*-
-"""
-sniff_agents.py — 一键诊断客服列表字段名
-用法：
-  cd C:\Users\Administrator\Desktop\dskehuduan
-  python sniff_agents.py
-
-脚本会：
-1. 自动读取本地 config.json 里所有店铺的 cookies
-2. 调用三个客服列表接口（v1/v2/v3）
-3. 完整打印每个客服的所有字段，用 ★ 标出备注相关字段
-4. 把结果保存到 agents_result.json
-"""
+# sniff_agents.py -- yi jian zhen duan ke fu lie biao zi duan ming
+# yong fa: python sniff_agents.py
 import json
 import os
 import sys
-import time
 import requests
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".aikefu-client", "config.json")
 
-# 备注类字段名（出现时用 ★ 标记）
 REMARK_KEYS = {
     "remarkName", "remark", "memo", "tag", "comment", "note",
     "csRemark", "label", "alias", "mark", "description", "desc",
@@ -28,13 +16,13 @@ REMARK_KEYS = {
 
 def load_config():
     if not os.path.exists(CONFIG_FILE):
-        print(f"❌ 找不到配置文件: {CONFIG_FILE}")
-        print("   请先启动主程序并登录拼多多店铺")
+        print("ERROR: config file not found: " + CONFIG_FILE)
+        print("Please login to pdd first in the main app")
         sys.exit(1)
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def make_session(cookies: dict, anti: str) -> requests.Session:
+def make_session(cookies, anti):
     sess = requests.Session()
     sess.headers.update({
         "User-Agent": (
@@ -52,13 +40,13 @@ def make_session(cookies: dict, anti: str) -> requests.Session:
     return sess
 
 def print_agent(uid_key, item):
-    print(f"  --- 客服 key={uid_key} ---")
+    print("  --- ke fu key=" + str(uid_key) + " ---")
     for k, v in item.items():
-        star = " ★ 可能是备注字段！" if k in REMARK_KEYS else ""
-        print(f"    {k}: {repr(v)}{star}")
+        star = "  REMARK FIELD!" if k in REMARK_KEYS else ""
+        print("    " + str(k) + ": " + repr(v) + star)
 
-def parse_agents(data: dict, label: str):
-    print(f"\n  [解析] {label} 原始响应（前2000字）:")
+def parse_agents(data, label):
+    print("\n  [jie xi] " + label + " yuan shi xiang ying (qian 2000 zi):")
     print("  " + str(data)[:2000])
 
     result = data.get("result") or {}
@@ -66,26 +54,26 @@ def parse_agents(data: dict, label: str):
 
     if isinstance(result, list):
         cs_map = result
-        print(f"  → result 是列表，长度={len(result)}")
+        print("  -> result shi lie biao, chang du=" + str(len(result)))
     elif isinstance(result, dict):
         for field in ("csList", "staffList", "onlineList", "list", "csInfoList", "agentList", "data"):
             if result.get(field) is not None:
                 cs_map = result[field]
-                print(f"  → 从 result.{field} 取到客服数据")
+                print("  -> cong result." + field + " qu dao ke fu shu ju")
                 break
         if cs_map is None and result:
             cs_map = result
-            print("  → result 无已知列表字段，把 result 整体当 csid→info 字典使用")
+            print("  -> result wu yi zhi lie biao zi duan, ba result zheng ti dang csid->info zi dian shi yong")
 
     if cs_map is None:
         for field in ("csList", "staffList", "onlineList", "list", "csInfoList", "agentList", "data"):
             if data.get(field) is not None:
                 cs_map = data[field]
-                print(f"  → 从顶层 data.{field} 取到客服数据")
+                print("  -> cong ding ceng data." + field + " qu dao ke fu shu ju")
                 break
 
     if cs_map is None:
-        print(f"  ⚠ 无法找到客服列表，响应顶层字段: {list(data.keys())}")
+        print("  WARNING: wu fa zhao dao ke fu lie biao, xiang ying ding ceng zi duan: " + str(list(data.keys())))
         return []
 
     if isinstance(cs_map, list):
@@ -99,87 +87,87 @@ def parse_agents(data: dict, label: str):
             print_agent(uid_key, item)
             agents.append({"key": uid_key, "data": item})
     else:
-        print(f"  ⚠ cs_map 类型异常: {type(cs_map)}")
+        print("  WARNING: cs_map lei xing yi chang: " + str(type(cs_map)))
 
     return agents
 
-def try_v1(sess, shop_id, anti):
+def try_v1(sess, anti):
     url = "https://mms.pinduoduo.com/latitude/assign/getAssignCsList"
-    print(f"\n{'='*60}")
-    print(f"[接口v1] {url}")
+    print("\n" + "="*60)
+    print("[jie kou v1] " + url)
     try:
         r = sess.post(url, json={"wechatCheck": True, "anti_content": anti}, timeout=15)
-        print(f"  状态码: {r.status_code}")
+        print("  zhuang tai ma: " + str(r.status_code))
         if r.status_code != 200:
-            print(f"  ❌ 非200，跳过")
+            print("  ERROR: fei 200, tiao guo")
             return None
         data = r.json()
         if not data.get("success"):
             msg = data.get("errorMsg") or data.get("error_msg") or str(data)[:200]
-            print(f"  ❌ success=False: {msg}")
+            print("  ERROR: success=False: " + str(msg))
             return None
         agents = parse_agents(data, "v1")
-        print(f"  ✅ 解析到 {len(agents)} 个客服")
+        print("  OK: jie xi dao " + str(len(agents)) + " ge ke fu")
         return agents
     except Exception as e:
-        print(f"  ❌ 异常: {e}")
+        print("  ERROR: yi chang: " + str(e))
         return None
 
 def try_v2(sess):
     url = "https://mms.pinduoduo.com/mms/api/cs/online_list"
-    print(f"\n{'='*60}")
-    print(f"[接口v2] {url}")
+    print("\n" + "="*60)
+    print("[jie kou v2] " + url)
     try:
         r = sess.get(url, timeout=15)
-        print(f"  状态码: {r.status_code}")
+        print("  zhuang tai ma: " + str(r.status_code))
         if r.status_code != 200:
-            print(f"  ❌ 非200，跳过")
+            print("  ERROR: fei 200, tiao guo")
             return None
         data = r.json()
         if not (data.get("success") or data.get("result")):
-            print(f"  ❌ 接口返回失败: {str(data)[:200]}")
+            print("  ERROR: jie kou fan hui shi bai: " + str(data)[:200])
             return None
         agents = parse_agents(data, "v2")
-        print(f"  ✅ 解析到 {len(agents)} 个客服")
+        print("  OK: jie xi dao " + str(len(agents)) + " ge ke fu")
         return agents
     except Exception as e:
-        print(f"  ❌ 异常: {e}")
+        print("  ERROR: yi chang: " + str(e))
         return None
 
 def try_v3(sess):
     url = "https://mms.pinduoduo.com/service/im/cs/list"
-    print(f"\n{'='*60}")
-    print(f"[接口v3] {url}")
+    print("\n" + "="*60)
+    print("[jie kou v3] " + url)
     try:
         r = sess.get(url, timeout=15)
-        print(f"  状态码: {r.status_code}")
+        print("  zhuang tai ma: " + str(r.status_code))
         if r.status_code != 200:
-            print(f"  ❌ 非200，跳过")
+            print("  ERROR: fei 200, tiao guo")
             return None
         data = r.json()
         if not (data.get("success") or data.get("result")):
-            print(f"  ❌ 接口返回失败: {str(data)[:200]}")
+            print("  ERROR: jie kou fan hui shi bai: " + str(data)[:200])
             return None
         agents = parse_agents(data, "v3")
-        print(f"  ✅ 解析到 {len(agents)} 个客服")
+        print("  OK: jie xi dao " + str(len(agents)) + " ge ke fu")
         return agents
     except Exception as e:
-        print(f"  ❌ 异常: {e}")
+        print("  ERROR: yi chang: " + str(e))
         return None
 
 def run_for_shop(shop_id, cookies, anti):
-    print(f"\n{'#'*60}")
-    print(f"# 店铺 shop_id={shop_id}  cookies={len(cookies)}个  anti={'已配置' if anti else '未配置'}")
-    print(f"{'#'*60}")
+    print("\n" + "#"*60)
+    print("# shop_id=" + str(shop_id) + "  cookies=" + str(len(cookies)) + "ge  anti=" + ("yi pei zhi" if anti else "wei pei zhi"))
+    print("#"*60)
 
     if not cookies:
-        print("  ⚠ cookies 为空，跳过该店铺")
+        print("  WARNING: cookies wei kong, tiao guo gai dian pu")
         return {}
 
     sess = make_session(cookies, anti)
     result = {"shop_id": shop_id, "v1": None, "v2": None, "v3": None}
 
-    agents = try_v1(sess, shop_id, anti)
+    agents = try_v1(sess, anti)
     result["v1"] = agents
 
     if agents is None:
@@ -191,17 +179,17 @@ def run_for_shop(shop_id, cookies, anti):
         result["v3"] = agents
 
     if agents is None:
-        print(f"\n  ❌ 三个接口均失败，cookies 可能已过期")
+        print("\n  ERROR: san ge jie kou jun shi bai, cookies ke neng yi guo qi")
     elif len(agents) == 0:
-        print(f"\n  ⚠ 接口成功但客服列表为空（当前无在线客服？）")
+        print("\n  WARNING: jie kou cheng gong dan ke fu lie biao wei kong")
     else:
-        print(f"\n  ✅ 共找到 {len(agents)} 个客服")
+        print("\n  OK: gong zhao dao " + str(len(agents)) + " ge ke fu")
 
     return result
 
 def main():
     print("=" * 60)
-    print("  拼多多客服列表字段诊断工具")
+    print("  PDD ke fu lie biao zi duan zhen duan gong ju")
     print("=" * 60)
 
     cfg = load_config()
@@ -209,10 +197,10 @@ def main():
     anti_map = cfg.get("pdd_anti_content", {})
 
     if not shops:
-        print("❌ config.json 里没有 active_shops，请先在主程序登录拼多多店铺")
+        print("ERROR: config.json li mei you active_shops")
         sys.exit(1)
 
-    print(f"\n找到 {len(shops)} 个店铺")
+    print("\n zhao dao " + str(len(shops)) + " ge dian pu")
 
     all_results = []
     for shop in shops:
@@ -222,15 +210,13 @@ def main():
         res = run_for_shop(shop_id, cookies, anti)
         all_results.append(res)
 
-    # 保存结果
     out_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents_result.json")
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-    print(f"\n{'='*60}")
-    print(f"✅ 诊断完成！完整结果已保存到: {out_file}")
-    print(f"   把上面输出（或 agents_result.json）发给我，我来修复备注字段名")
-    print(f"{'='*60}")
+    print("\n" + "="*60)
+    print("OK: zhen duan wan cheng! jie guo yi bao cun dao: " + out_file)
+    print("="*60)
 
 if __name__ == "__main__":
     main()
