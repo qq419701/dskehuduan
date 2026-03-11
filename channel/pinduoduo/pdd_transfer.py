@@ -85,6 +85,13 @@ class PddTransferHuman:
 
     async def transfer(self, buyer_id: str = "", order_sn: str = "",
                        buyer_name: str = "", target_agent: str = "") -> dict:
+        # 如果调用方没有传 target_agent，从配置文件读取
+        if not target_agent:
+            import config as cfg
+            settings = cfg.get_pdd_transfer_settings()
+            target_agent = settings.get("target_account", "")
+            if target_agent:
+                logger.info("[transfer] 从配置读取指定客服: %s", target_agent)
         logger.info("[transfer] 开始转人工: buyer_id=%s order_sn=%s buyer_name=%s target_agent=%s",
                     buyer_id, order_sn, buyer_name, target_agent)
         if not self.cookies:
@@ -345,9 +352,20 @@ class PddTransferHuman:
                         resp = r.json()
                         # 优先用接口自定义的成功判断函数
                         custom_check = attempt.get("success_check")
-                        if custom_check and custom_check(resp):
-                            return True
-                        # 通用成功判断
+                        if custom_check:
+                            if custom_check(resp):
+                                return True
+                            # 自定义检查明确失败，记录详细错误信息，跳过通用判断
+                            result_obj = resp.get("result")
+                            if isinstance(result_obj, dict):
+                                err_code = result_obj.get("error_code", "")
+                                err_msg = result_obj.get("error_msg", "")
+                                if err_code or err_msg:
+                                    logger.warning("转移接口业务失败: error_code=%s error_msg=%s",
+                                                   err_code, err_msg)
+                            logger.warning("转移接口返回失败: %s", str(resp)[:300])
+                            continue
+                        # 通用成功判断（仅在无自定义 success_check 时使用）
                         # success 字段：True 或 1 或 "true"/"ok" 都算成功
                         if resp.get("success") in (True, 1, "true", "ok"):
                             return True
@@ -380,24 +398,31 @@ class PddTransferHuman:
     def _choose_agent(self, agents: list, target_agent: str = ""):
         if not agents:
             return None
-        # 优先：按名字定向匹配
+        # 优先：按名字定向匹配（在所有客服中查找，不限制主子账号）
         if target_agent:
             for a in agents:
                 if target_agent in a.get("name", ""):
                     return a
             # 名字未命中，记日志后回退到策略选择
             logger.warning("[transfer] 未找到指定客服 '%s'，回退到策略选择", target_agent)
+        # 过滤掉主账号（csid 不含 cs_ 前缀），只选子账号
+        sub_agents = [a for a in agents if a.get("csid", "").startswith("cs_")]
+        if sub_agents:
+            candidates = sub_agents
+        else:
+            logger.warning("[transfer] 没有找到子账号（cs_ 前缀），将从全部客服中选择")
+            candidates = agents
         if self.strategy == "random":
-            return random.choice(agents)
+            return random.choice(candidates)
         if self.strategy == "least_busy":
-            return min(agents, key=lambda a: a.get("unreplied", 0))
+            return min(candidates, key=lambda a: a.get("unreplied", 0))
         if self.strategy == "round_robin":
             global _round_robin_index
             idx    = _round_robin_index.get(self.shop_id, 0)
-            chosen = agents[idx % len(agents)]
-            _round_robin_index[self.shop_id] = (idx + 1) % len(agents)
+            chosen = candidates[idx % len(candidates)]
+            _round_robin_index[self.shop_id] = (idx + 1) % len(candidates)
             return chosen
-        return agents[0]  # first（默认）
+        return candidates[0]  # first（默认）
 
     # ------------------------------------------------------------------
     # 关闭（保持 async 兼容旧接口）
