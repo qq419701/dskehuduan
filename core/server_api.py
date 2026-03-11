@@ -4,6 +4,8 @@ aikefu 服务器 REST API 客户端
 主接口：POST /api/webhook/message
 """
 import logging
+import time
+
 import requests
 
 logger = logging.getLogger(__name__)
@@ -216,36 +218,52 @@ class ServerAPI:
             "action_codes": action_codes,
             "client_version": version,
         }
-        try:
-            resp = self.session.post(
-                f"{self.base_url}/api/plugin/register",
-                json=payload,
-                headers={"X-Shop-Token": shop_token},
-                timeout=DEFAULT_TIMEOUT,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except requests.RequestException as e:
-            logger.error("插件注册失败: %s", e)
-            return {"success": False, "error": str(e)}
+        for attempt in range(2):
+            try:
+                resp = self.session.post(
+                    f"{self.base_url}/api/plugin/register",
+                    json=payload,
+                    headers={"X-Shop-Token": shop_token},
+                    timeout=DEFAULT_TIMEOUT,
+                )
+                resp.raise_for_status()
+                return resp.json()
+            except requests.ConnectionError as e:
+                if attempt == 0:
+                    logger.debug("插件注册连接中断，静默重试: %s", e)
+                    time.sleep(0.5)
+                else:
+                    logger.debug("插件注册重试仍失败: %s", e)
+                    return {"success": False, "error": str(e)}
+            except requests.RequestException as e:
+                logger.error("插件注册失败: %s", e)
+                return {"success": False, "error": str(e)}
 
     def plugin_heartbeat(self, shop_token: str, plugin_id: str) -> dict:
         """
         发送心跳，保持插件在线状态
         POST /api/plugin/heartbeat
         """
-        try:
-            resp = self.session.post(
-                f"{self.base_url}/api/plugin/heartbeat",
-                json={"plugin_id": plugin_id},
-                headers={"X-Shop-Token": shop_token},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except requests.RequestException as e:
-            logger.warning("心跳发送失败: %s", e)
-            return {"success": False, "error": str(e)}
+        for attempt in range(2):
+            try:
+                resp = self.session.post(
+                    f"{self.base_url}/api/plugin/heartbeat",
+                    json={"plugin_id": plugin_id},
+                    headers={"X-Shop-Token": shop_token},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                return resp.json()
+            except requests.ConnectionError as e:
+                if attempt == 0:
+                    logger.debug("心跳连接中断，静默重试: %s", e)
+                    time.sleep(0.5)
+                else:
+                    logger.debug("心跳重试仍失败: %s", e)
+                    return {"success": False, "error": str(e)}
+            except requests.RequestException as e:
+                logger.warning("心跳发送失败: %s", e)
+                return {"success": False, "error": str(e)}
 
     def plugin_get_tasks(self, shop_token: str) -> list:
         """
@@ -253,20 +271,28 @@ class ServerAPI:
         GET /api/plugin/tasks
         返回：[{id, task_id, action_code, payload, status, ...}]
         """
-        try:
-            resp = self.session.get(
-                f"{self.base_url}/api/plugin/tasks",
-                headers={"X-Shop-Token": shop_token},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if isinstance(data, list):
-                return data
-            return data.get("tasks", []) if isinstance(data, dict) else []
-        except requests.RequestException as e:
-            logger.warning("拉取任务失败: %s", e)
-            return []
+        for attempt in range(2):
+            try:
+                resp = self.session.get(
+                    f"{self.base_url}/api/plugin/tasks",
+                    headers={"X-Shop-Token": shop_token},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if isinstance(data, list):
+                    return data
+                return data.get("tasks", []) if isinstance(data, dict) else []
+            except requests.ConnectionError as e:
+                if attempt == 0:
+                    logger.debug("拉取任务连接中断，静默重试: %s", e)
+                    time.sleep(0.5)
+                else:
+                    logger.debug("拉取任务重试仍失败: %s", e)
+                    return []
+            except requests.RequestException as e:
+                logger.warning("拉取任务失败: %s", e)
+                return []
 
     def plugin_task_done(self, shop_token: str, task_id: str, result: dict) -> dict:
         """

@@ -6,6 +6,7 @@
 """
 import asyncio
 import logging
+import time
 
 from PyQt6.QtCore import Qt, pyqtSignal, QThread
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon, QMenu
@@ -47,16 +48,37 @@ class ChannelWorker(QThread):
         self.server_api = server_api
         self._channel = None
         self._loop = None
+        self._running = True
 
     def run(self):
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
-        try:
-            self._loop.run_until_complete(self._start_channel())
-        except Exception as e:
-            logger.error("采集线程异常: %s", e)
-        finally:
-            self._loop.close()
+        MAX_RETRIES = 5
+        retry_count = 0
+        while self._running and retry_count < MAX_RETRIES:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            try:
+                self._loop.run_until_complete(self._start_channel())
+                break  # 正常退出，不重启
+            except Exception as e:
+                retry_count += 1
+                err_str = str(e)
+                # 浏览器被关闭是可恢复的异常，自动重启
+                if "Target page, context or browser has been closed" in err_str or \
+                   "Browser has been closed" in err_str:
+                    logger.warning(
+                        "采集线程异常（浏览器关闭），%d秒后自动重启（第%d次）: %s",
+                        5 * retry_count, retry_count, err_str[:100],
+                    )
+                    time.sleep(5 * retry_count)  # 指数退避
+                    continue
+                else:
+                    logger.error("采集线程异常: %s", e)
+                    break
+            finally:
+                try:
+                    self._loop.close()
+                except Exception:
+                    pass
 
     async def _start_channel(self):
         from channel.pinduoduo.pdd_login import PddLogin
@@ -104,6 +126,7 @@ class ChannelWorker(QThread):
         self.status_changed.emit(shop_id, False)
 
     def stop_channel(self):
+        self._running = False
         if self._channel and self._loop:
             self._loop.call_soon_threadsafe(
                 lambda: self._loop.create_task(self._channel.stop())

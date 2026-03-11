@@ -206,8 +206,14 @@ class AikefuTaskRunner:
         handler = getattr(self, handler_name)
         try:
             result = await handler(payload)
-            logger.info("任务 %s 执行成功: %s", task_id, result)
-            await self._report_done(task_id, result)
+            # 如果 handler 返回了明确的 success=False，上报失败而不是成功
+            if isinstance(result, dict) and result.get("success") is False:
+                err = result.get("message", "任务执行失败")
+                logger.warning("任务 %s 执行返回失败: %s", task_id, err)
+                await self._report_fail(task_id, err)
+            else:
+                logger.info("任务 %s 执行成功: %s", task_id, result)
+                await self._report_done(task_id, result)
         except Exception as e:
             err = str(e)
             logger.error("任务 %s 执行异常: %s", task_id, err)
