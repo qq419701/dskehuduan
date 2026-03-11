@@ -329,3 +329,34 @@ class ServerAPI:
         except requests.RequestException as e:
             logger.error("上报任务失败状态失败: %s", e)
             return {"success": False, "error": str(e)}
+
+    def reply_to_buyer(
+        self,
+        shop_token: str,
+        buyer_id: str,
+        reply: str,
+        task_id: str = "",
+    ) -> dict:
+        """
+        将 AI 回复内容发送给买家（v2.1 新增）
+        POST /api/plugin/reply_to_buyer
+        payload: {buyer_id, reply, task_id}
+        Header: X-Shop-Token
+        返回: {success, message}
+        """
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/api/plugin/reply_to_buyer",
+                json={
+                    "buyer_id": buyer_id,
+                    "reply": reply,
+                    "task_id": task_id or "",
+                },
+                headers={"X-Shop-Token": shop_token},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            logger.error("发送AI回复给买家失败: %s", e)
+            return {"success": False, "error": str(e)}
