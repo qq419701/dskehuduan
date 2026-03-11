@@ -191,6 +191,8 @@ class PddTransferHuman:
                     "uid": uid,
                     "csid": csid,
                     "unreplied": item.get("unreplyNum", 0),
+                    "remark": (item.get("remark") or item.get("comment") or
+                               item.get("note") or item.get("csRemark") or ""),
                     "raw": item,
                 })
         return agents
@@ -398,13 +400,17 @@ class PddTransferHuman:
     def _choose_agent(self, agents: list, target_agent: str = ""):
         if not agents:
             return None
-        # 优先：按名字定向匹配（在所有客服中查找，不限制主子账号）
+        # 优先：按名字或备注定向匹配（在所有客服中查找，不限制主子账号）
         if target_agent:
             for a in agents:
-                if target_agent in a.get("name", ""):
+                name_match = target_agent in a.get("name", "")
+                remark_match = target_agent in a.get("remark", "")
+                if name_match or remark_match:
+                    logger.info("[transfer] 指定客服匹配: name=%s remark=%s (关键词=%s)",
+                                a.get("name"), a.get("remark"), target_agent)
                     return a
-            # 名字未命中，记日志后回退到策略选择
-            logger.warning("[transfer] 未找到指定客服 '%s'，回退到策略选择", target_agent)
+            # 昵称和备注均未命中，记日志后回退到策略选择
+            logger.warning("[transfer] 未找到指定客服 '%s'（昵称和备注均未命中），回退到策略选择", target_agent)
         # 过滤掉主账号（csid 不含 cs_ 前缀），只选子账号
         sub_agents = [a for a in agents if a.get("csid", "").startswith("cs_")]
         if sub_agents:
