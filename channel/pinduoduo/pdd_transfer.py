@@ -1,4 +1,4 @@
-' # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # pdd_transfer.py - 纯 HTTP API 版本，不启动任何浏览器
 # 直接用 cookies 调用拼多多接口转移会话
 import logging
@@ -191,7 +191,7 @@ class PddTransferHuman:
                           item.get("memo") or item.get("tag") or
                           item.get("comment") or item.get("note") or
                           item.get("csRemark") or item.get("label") or "")
-                logger.debug("[transfer] 客服原始数据: uid_key=%s item=%s", uid_key, item)
+                logger.info("[transfer] 客服原始数据: uid_key=%s item=%s", uid_key, item)
                 agents.append({
                     "name": name,
                     "uid": uid,
@@ -229,7 +229,7 @@ class PddTransferHuman:
             return None
 
     def _try_agent_list_v2(self, sess: requests.Session):
-        """备用接口2：mms/api/cs/online_list（GET，通常无需 anti_content）"""
+        """备用接口2：mms/api/cs/online_list（GET���通常无需 anti_content）"""
         url = "https://mms.pinduoduo.com/mms/api/cs/online_list"
         try:
             r = sess.get(url, timeout=15)
@@ -281,7 +281,7 @@ class PddTransferHuman:
         request_id = int(time.time() * 1000)
 
         attempts = [
-            # 接口 1：plateau/chat/move_conversation（抓包确认可用，优先级最高）
+            # 接口 1：plateau/chat/move_conversation（抓包确认��用，优先级最高）
             {
                 "url": "https://mms.pinduoduo.com/plateau/chat/move_conversation",
                 "json": {
