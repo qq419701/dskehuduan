@@ -239,3 +239,29 @@ def save_pdd_transfer_settings(settings: dict) -> bool:
         conf["pdd_settings"] = {}
     conf["pdd_settings"]["transfer"] = settings
     return save_config(conf)
+
+
+# ── anti_content 管理（拼多多设备指纹，JS动态生成，需单独存储）──────────────────
+
+
+def get_anti_content(shop_id: str) -> str:
+    """
+    获取指定店铺的 anti_content（拼多多设备指纹字符串）。
+    anti_content 是拼多多页面 JS 动态生成的，不存储在 cookie 中，需单独保存。
+    返回空字符串表示未配置。
+    """
+    conf = load_config()
+    anti_map = conf.get("pdd_anti_content", {})
+    return anti_map.get(str(shop_id), "")
+
+
+def save_anti_content(shop_id: str, anti: str) -> bool:
+    """
+    保存指定店铺的 anti_content（拼多多设备指纹字符串）。
+    anti_content 是拼多多页面 JS 动态生成的，需在浏览器中抓包后手动配置。
+    """
+    conf = load_config()
+    if "pdd_anti_content" not in conf:
+        conf["pdd_anti_content"] = {}
+    conf["pdd_anti_content"][str(shop_id)] = anti
+    return save_config(conf)

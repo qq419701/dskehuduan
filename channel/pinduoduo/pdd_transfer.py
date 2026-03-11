@@ -31,7 +31,10 @@ class PddTransferHuman:
     def _get_session(self) -> requests.Session:
         if self._session is None:
             self._session = requests.Session()
-            anti = self.cookies.get("anti_content", "") or self.cookies.get("ANTI_CONTENT", "")
+            # anti_content 是拼多多页面 JS 动态生成的设备指纹，不存储在 cookie 中，
+            # 需要从配置文件单独读取（由用户在浏览器抓包后手动配置）
+            import config as cfg
+            anti = cfg.get_anti_content(self.shop_id)
             self._session.headers.update({
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -45,18 +48,31 @@ class PddTransferHuman:
             })
             for k, v in self.cookies.items():
                 self._session.cookies.set(k, v, domain=".pinduoduo.com")
-            logger.info("[transfer] Session 初始化完成，注入 cookies: %d 个，key列表=%s",
-                        len(self.cookies), list(self.cookies.keys())[:10])
+            logger.info("[transfer] Session 初始化完成，注入 cookies: %d 个，key列表=%s，anti_content=%s",
+                        len(self.cookies), list(self.cookies.keys())[:10],
+                        "已配置" if anti else "未配置（风控风险）")
         return self._session
+
+    def refresh_anti_content(self):
+        """
+        刷新 anti_content 到当前 session 的请求头。
+        在转移失败后重试前调用，以获取最新的设备指纹。
+        """
+        import config as cfg
+        anti = cfg.get_anti_content(self.shop_id)
+        if self._session:
+            self._session.headers.update({"X-Anti-Content": anti})
+            logger.info("[transfer] 已刷新 anti_content: %s", "已配置" if anti else "未配置")
+        return anti
 
     # ------------------------------------------------------------------
     # 核心入口
     # ------------------------------------------------------------------
 
     async def transfer(self, buyer_id: str = "", order_sn: str = "",
-                       buyer_name: str = "") -> dict:
-        logger.info("[transfer] 开始转人工: buyer_id=%s order_sn=%s buyer_name=%s",
-                    buyer_id, order_sn, buyer_name)
+                       buyer_name: str = "", target_agent: str = "") -> dict:
+        logger.info("[transfer] 开始转人工: buyer_id=%s order_sn=%s buyer_name=%s target_agent=%s",
+                    buyer_id, order_sn, buyer_name, target_agent)
         if not self.cookies:
             logger.error("[transfer] cookies 为空，无法调用接口")
             return {"success": False, "agent": "", "message": "cookies 为空，请先登录拼多多"}
@@ -73,15 +89,20 @@ class PddTransferHuman:
             logger.info("[transfer] 可用客服列表: %s",
                         [(a.get("name"), a.get("csid")) for a in agents])
 
-            # 2. 按策略选择
-            chosen = self._choose_agent(agents)
+            # 2. 按策略选择（支持定向指定客服）
+            chosen = self._choose_agent(agents, target_agent=target_agent)
             if not chosen:
                 return {"success": False, "agent": "", "message": "策略未能选出客服"}
             logger.info("[transfer] 选中客服: name=%s csid=%s uid=%s",
                         chosen.get("name"), chosen.get("csid"), chosen.get("uid"))
 
-            # 3. 调用转移接口
+            # 3. 调用转移接口（实时获取最新 anti_content）
             success = self._do_transfer(sess, chosen, buyer_id, order_sn, buyer_name)
+            if not success:
+                # 刷新 anti_content 后重试一次
+                self.refresh_anti_content()
+                success = self._do_transfer(sess, chosen, buyer_id, order_sn, buyer_name)
+
             if success:
                 logger.info("[transfer] 转移成功 -> %s", chosen.get("name", ""))
                 return {
@@ -96,62 +117,123 @@ class PddTransferHuman:
             return {"success": False, "agent": "", "message": str(e)}
 
     # ------------------------------------------------------------------
-    # 获取客服列表
+    # 获取客服列表（多接口依次尝试）
     # ------------------------------------------------------------------
 
     def _get_agent_list(self, sess: requests.Session):
         """
-        调用 getAssignCsList 获取可接收转移的客服列表。
-        返回 None = 接口异常，返回 [] = 接口正常但无客服。
+        依次尝试多个接口获取可接收转移的客服列表，任一成功即返回。
+        返回 None = 所有接口均异常，返回 [] = 接口正常但无客服。
         """
+        # 接口1：主接口（可能需要 anti_content）
+        agents = self._try_agent_list_v1(sess)
+        if agents is not None:
+            return agents
+        # 接口2：备用接口（通常不需要 anti_content）
+        agents = self._try_agent_list_v2(sess)
+        if agents is not None:
+            return agents
+        # 接口3：再备用
+        agents = self._try_agent_list_v3(sess)
+        return agents
+
+    def _parse_agents_from_data(self, data: dict) -> list:
+        """从接口响应中解析客服列表，兼容多种字段名"""
+        result = data.get("result") or {}
+        # 兼容多种字段名（用 is not None 以免空列表被跳过）
+        cs_map = None
+        if isinstance(result, list):
+            cs_map = result
+        else:
+            for field in ("csList", "staffList", "onlineList", "list"):
+                if result.get(field) is not None:
+                    cs_map = result[field]
+                    break
+        if cs_map is None:
+            cs_map = {}
+
+        if isinstance(cs_map, list):
+            cs_map = {str(i): item for i, item in enumerate(cs_map)}
+
+        agents = []
+        if isinstance(cs_map, dict):
+            for uid_key, item in cs_map.items():
+                name = (item.get("csName") or item.get("username") or
+                        item.get("nickname") or item.get("staffName") or
+                        item.get("name") or uid_key)
+                uid = str(item.get("id") or item.get("uid") or uid_key)
+                csid = str(item.get("csId") or item.get("csid") or uid_key)
+                agents.append({
+                    "name": name,
+                    "uid": uid,
+                    "csid": csid,
+                    "unreplied": item.get("unreplyNum", 0),
+                    "raw": item,
+                })
+        return agents
+
+    def _try_agent_list_v1(self, sess: requests.Session):
+        """主接口：latitude/assign/getAssignCsList（需要 anti_content）"""
+        import config as cfg
         url = "https://mms.pinduoduo.com/latitude/assign/getAssignCsList"
         try:
-            anti = self.cookies.get("anti_content", "")
+            anti = cfg.get_anti_content(self.shop_id)
             r = sess.post(url, json={"wechatCheck": True, "anti_content": anti}, timeout=15)
-            logger.info("客服列表接口响应 [%d]: %s", r.status_code, r.text[:800])
+            logger.info("客服列表接口v1响应 [%d]: %s", r.status_code, r.text[:800])
             if r.status_code != 200:
-                logger.warning("[transfer] 客服列表接口返回非200: %d", r.status_code)
+                logger.warning("[transfer] 客服列表v1接口返回非200: %d", r.status_code)
                 return None
             data = r.json()
             if not data.get("success"):
                 logger.warning("getAssignCsList 返回 success=False: %s",
                                data.get("errorMsg") or data.get("error_msg") or str(data)[:300])
                 return None
-
-            result = data.get("result") or {}
-            # 兼容多种字段名（用 is not None 以免空列表被跳过）
-            cs_map = (result.get("csList") if result.get("csList") is not None
-                      else result.get("staffList") if result.get("staffList") is not None
-                      else result.get("onlineList") if result.get("onlineList") is not None
-                      else {})
-
-            if isinstance(cs_map, list):
-                # 有时返回列表而非dict
-                cs_map = {str(i): item for i, item in enumerate(cs_map)}
-
-            agents = []
-            if isinstance(cs_map, dict):
-                for uid_key, item in cs_map.items():
-                    name = (item.get("csName") or item.get("username") or
-                            item.get("nickname") or item.get("staffName") or uid_key)
-                    uid = str(item.get("id") or item.get("uid") or uid_key)
-                    csid = str(item.get("csId") or item.get("csid") or uid_key)
-                    agents.append({
-                        "name": name,
-                        "uid": uid,
-                        "csid": csid,
-                        "unreplied": item.get("unreplyNum", 0),
-                        "raw": item,
-                    })
-
-            logger.info("[transfer] 解析到 %d 个客服", len(agents))
+            agents = self._parse_agents_from_data(data)
+            logger.info("[transfer] v1接口解析到 %d 个客服", len(agents))
             if agents:
                 return agents
-            logger.warning("客服列表为空，接口原始数据: %s", str(data)[:500])
+            logger.warning("客服列表v1为空，接口原始数据: %s", str(data)[:500])
             return []
-
         except Exception as e:
-            logger.warning("客服列表接口失败: %s", e)
+            logger.warning("客服列表v1接口失败: %s", e)
+            return None
+
+    def _try_agent_list_v2(self, sess: requests.Session):
+        """备用接口2：mms/api/cs/online_list（GET，通常无需 anti_content）"""
+        url = "https://mms.pinduoduo.com/mms/api/cs/online_list"
+        try:
+            r = sess.get(url, timeout=15)
+            logger.info("客服列表接口v2响应 [%d]: %s", r.status_code, r.text[:800])
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            if not (data.get("success") or data.get("result")):
+                logger.warning("v2接口返回失败: %s", str(data)[:300])
+                return None
+            agents = self._parse_agents_from_data(data)
+            logger.info("[transfer] v2接口解析到 %d 个客服", len(agents))
+            return agents if agents else []
+        except Exception as e:
+            logger.warning("客服列表v2接口失败: %s", e)
+            return None
+
+    def _try_agent_list_v3(self, sess: requests.Session):
+        """备用接口3：service/im/cs/list（GET，基础认证）"""
+        url = "https://mms.pinduoduo.com/service/im/cs/list"
+        try:
+            r = sess.get(url, timeout=15)
+            logger.info("客服列表接口v3响应 [%d]: %s", r.status_code, r.text[:800])
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            if not (data.get("success") or data.get("result")):
+                logger.warning("v3接口返回失败: %s", str(data)[:300])
+                return None
+            agents = self._parse_agents_from_data(data)
+            logger.info("[transfer] v3接口解析到 %d 个客服", len(agents))
+            return agents if agents else []
+        except Exception as e:
+            logger.warning("客服列表v3接口失败: %s", e)
             return None
 
     # ------------------------------------------------------------------
@@ -160,9 +242,11 @@ class PddTransferHuman:
 
     def _do_transfer(self, sess: requests.Session, agent: dict,
                      buyer_id: str, order_sn: str, buyer_name: str) -> bool:
+        import config as cfg
         agent_uid  = agent.get("uid", "")
         agent_csid = agent.get("csid", "")
-        anti = self.cookies.get("anti_content", "")
+        # 每次实时从配置读取最新 anti_content（它可能会刷新）
+        anti = cfg.get_anti_content(self.shop_id)
 
         attempts = [
             # 接口 1：latitude/assign/transferConv（最常用）
@@ -230,15 +314,19 @@ class PddTransferHuman:
                 if r.status_code == 200:
                     try:
                         resp = r.json()
-                        # 严格的成功判断
+                        # success 字段：True 或 1 或 "true"/"ok" 都算成功
+                        if resp.get("success") in (True, 1, "true", "ok"):
+                            return True
+                        # errorCode 为 0 或 1000000 算成功
                         error_code = resp.get("errorCode") or resp.get("error_code") or resp.get("code")
-                        if resp.get("success") is True:
+                        if error_code in (0, 1000000, 200, "0", "1000000"):
                             return True
-                        if error_code in (0, 1000000, 200):
-                            return True
-                        # 检查嵌套结果
+                        # result 字段有值也算成功（部分接口这样返回）
                         result = resp.get("result")
-                        if isinstance(result, dict) and result.get("result") == "ok":
+                        nested_result = result.get("result") if isinstance(result, dict) else None
+                        if result and isinstance(result, dict) and nested_result in ("ok", "success", True):
+                            return True
+                        if result and isinstance(result, str) and result in ("ok", "success"):
                             return True
                         logger.warning("转移接口返回失败: errorCode=%s, msg=%s",
                                        error_code,
@@ -252,12 +340,19 @@ class PddTransferHuman:
         return False
 
     # ------------------------------------------------------------------
-    # 策略选择
+    # 策略选择（支持定向指定客服）
     # ------------------------------------------------------------------
 
-    def _choose_agent(self, agents: list):
+    def _choose_agent(self, agents: list, target_agent: str = ""):
         if not agents:
             return None
+        # 优先：按名字定向匹配
+        if target_agent:
+            for a in agents:
+                if target_agent in a.get("name", ""):
+                    return a
+            # 名字未命中，记日志后回退到策略选择
+            logger.warning("[transfer] 未找到指定客服 '%s'，回退到策略选择", target_agent)
         if self.strategy == "random":
             return random.choice(agents)
         if self.strategy == "least_busy":
