@@ -89,6 +89,7 @@ class PddSettingsPage(QWidget):
 
         # 三个卡片
         layout.addWidget(self._build_transfer_card())
+        layout.addWidget(self._build_pronunciation_card())
         layout.addWidget(self._build_order_card())
         layout.addWidget(self._build_refund_card())
         layout.addStretch()
@@ -199,6 +200,102 @@ class PddSettingsPage(QWidget):
         layout.addLayout(btn_layout)
 
         return card
+
+    def _build_pronunciation_card(self) -> QFrame:
+        """转人工发音规则配置卡片（v2.1 新增）"""
+        card = _make_card()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 16, 20, 20)
+        layout.setSpacing(14)
+
+        # 标题行
+        hdr = QHBoxLayout()
+        icon_title = QLabel("🔊  转人工发音规则配置")
+        icon_title.setStyleSheet(HEADER_STYLE)
+        badge = QLabel("✅ v2.1 新增")
+        badge.setStyleSheet(BADGE_ONLINE)
+        hdr.addWidget(icon_title)
+        hdr.addStretch()
+        hdr.addWidget(badge)
+        layout.addLayout(hdr)
+
+        desc = QLabel(
+            "配置买家消息中触发\u201c转人工\u201d意图的关键词/短语，支持直接输入规则（替代规则引擎配置方式）"
+        )
+        desc.setStyleSheet(SUB_STYLE)
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet("color:#3a3a3a;")
+        layout.addWidget(line)
+
+        # 触发关键词
+        kw_label = QLabel("触发关键词（每行一个，支持模糊匹配）")
+        kw_label.setStyleSheet("font-size:13px; color:#cccccc; font-weight:bold;")
+        layout.addWidget(kw_label)
+
+        from PyQt6.QtWidgets import QTextEdit
+        self._pronunciation_keywords = QTextEdit()
+        self._pronunciation_keywords.setPlaceholderText(
+            "人工\n客服\n转人工\n我要投诉\n联系客服"
+        )
+        self._pronunciation_keywords.setFixedHeight(120)
+        self._pronunciation_keywords.setStyleSheet(
+            "QTextEdit{background:#1e1e1e;color:#ddd;border:1px solid #555;"
+            "border-radius:5px;padding:6px 10px;font-size:13px;}"
+            "QTextEdit:focus{border:1px solid #0078d4;}"
+        )
+        layout.addWidget(self._pronunciation_keywords)
+
+        # 说明文字
+        tip = QLabel(
+            "💡 填写后，客户端轮询到 transfer_human 任务时会优先使用此处配置的关键词判断，"
+            "无需在 aikefu 后台单独配置规则引擎。"
+        )
+        tip.setStyleSheet("font-size:11px; color:#666666;")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+
+        # 保存按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        save_btn = QPushButton("💾  保存发音规则")
+        save_btn.setStyleSheet(SAVE_BTN_STYLE)
+        save_btn.clicked.connect(self._save_pronunciation_settings)
+        btn_layout.addWidget(save_btn)
+        layout.addLayout(btn_layout)
+
+        # 读取已保存的关键词
+        self._load_pronunciation_settings()
+
+        return card
+
+    def _load_pronunciation_settings(self):
+        """读取已保存的发音规则关键词"""
+        try:
+            transfer = cfg.get_pdd_transfer_settings()
+            keywords = transfer.get("pronunciation_keywords", "")
+            if keywords:
+                self._pronunciation_keywords.setPlainText(keywords)
+        except Exception:
+            pass
+
+    def _save_pronunciation_settings(self):
+        """保存发音规则关键词"""
+        keywords = self._pronunciation_keywords.toPlainText().strip()
+        transfer = cfg.get_pdd_transfer_settings()
+        transfer["pronunciation_keywords"] = keywords
+        ok = cfg.save_pdd_transfer_settings(transfer)
+        if ok:
+            QMessageBox.information(
+                self, "保存成功",
+                "✅ 发音规则已保存！\n\n关键词将在下次转人工任务触发时生效。"
+            )
+            logger.info("发音规则关键词已保存，共 %d 行", len(keywords.splitlines()))
+        else:
+            QMessageBox.warning(self, "保存失败", "❌ 配置文件写入失败，请检查权限。")
 
     def _build_order_card(self) -> QFrame:
         """同步订单设置卡片（预留/灰显）"""

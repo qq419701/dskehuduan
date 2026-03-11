@@ -10,6 +10,7 @@ aikefu 任务轮询执行器
   handle_refund   — 退款处理（记录模式，目前为人工确认）
   auto_order      — 自动下单选号（预留，开发中）
   transfer_human  — 转人工（调用 PddTransferHuman，自动转移拼多多会话给客服）
+  reply_sent      — AI回复已发送（v2.1新增，记录模式）
 
 轮询间隔：2秒（可配置）
 心跳间隔：30秒（保持插件在线状态）
@@ -29,6 +30,7 @@ ACTION_HANDLERS = {
     "handle_refund": "_handle_refund",           # 退款处理（人工确认）
     "auto_order": "_handle_auto_order",          # 自动下单选号（预留）
     "transfer_human": "_handle_transfer_human",  # 转人工（自动转移拼多多会话）
+    "reply_sent":    "_handle_reply_sent",       # AI回复已发送（v2.1新增）
 }
 
 # 插件注册名称
@@ -111,7 +113,7 @@ class AikefuTaskRunner:
                 plugin_id=self.plugin_id,
                 name=PLUGIN_NAME,
                 action_codes=list(ACTION_HANDLERS.keys()),
-                version="2.0.0",
+                version="2.1.0",
             ),
         )
         if result.get("success") is not False:
@@ -365,6 +367,28 @@ class AikefuTaskRunner:
             await transfer.close()
 
         return result
+
+    async def _handle_reply_sent(self, payload: dict) -> dict:
+        """
+        处理 AI 回复已发送通知任务（v2.1 新增）。
+        服务端在 AI 回复发送成功后下发此任务，客户端记录日志并可做本地统计。
+
+        payload 字段：
+          buyer_id  — 买家 ID
+          reply     — 已发送的回复内容
+          task_id   — 关联的原始任务 ID（可选）
+          shop_id   — 店铺 ID（可选）
+
+        返回：{"success": True, "message": "已记录"}
+        """
+        buyer_id = payload.get("buyer_id", "未知买家")
+        reply = payload.get("reply", "")
+        task_id = payload.get("task_id", "")
+        logger.info(
+            "AI回复已发送记录 buyer_id=%s task_id=%s reply=%s",
+            buyer_id, task_id, reply[:50] if reply else "",
+        )
+        return {"success": True, "message": "已记录"}
 
 
 # ===========================================================================
