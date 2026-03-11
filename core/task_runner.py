@@ -333,6 +333,7 @@ class AikefuTaskRunner:
         buyer_id = str(payload.get("buyer_id", ""))
         buyer_name = str(payload.get("buyer_name", ""))
         order_sn = str(payload.get("order_sn", ""))
+        target_agent = str(payload.get("target_agent", ""))
         strategy = payload.get("strategy") or config.get_transfer_strategy()
 
         if not self.shop_cookies:
@@ -352,6 +353,7 @@ class AikefuTaskRunner:
                 buyer_id=buyer_id,
                 order_sn=order_sn,
                 buyer_name=buyer_name,
+                target_agent=target_agent,
             )
         finally:
             await transfer.close()
