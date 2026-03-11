@@ -3,6 +3,7 @@
 # 直接用 cookies 调用拼多多接口转移会话
 import logging
 import random
+import time
 import requests
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,19 @@ class PddTransferHuman:
             self._session.headers.update({"X-Anti-Content": anti})
             logger.info("[transfer] 已刷新 anti_content: %s", "已配置" if anti else "未配置")
         return anti
+
+    def reset_session(self):
+        """
+        重置并关闭当前 session，下次调用 _get_session() 时会重新初始化。
+        在 anti_content 更新后调用，确保新 session 使用最新的设备指纹。
+        """
+        if self._session:
+            try:
+                self._session.close()
+            except Exception:
+                pass
+            self._session = None
+            logger.info("[transfer] Session 已重置，下次请求将重新初始化")
 
     # ------------------------------------------------------------------
     # 核心入口
@@ -162,7 +176,9 @@ class PddTransferHuman:
                         item.get("nickname") or item.get("staffName") or
                         item.get("name") or uid_key)
                 uid = str(item.get("id") or item.get("uid") or uid_key)
-                csid = str(item.get("csId") or item.get("csid") or uid_key)
+                # csList 的 key 本身就是 csid（如 "cs_106324383_180462738"），
+                # 不要用 item 内的 id 数字字段，那是数字 id 而非字符串 csid
+                csid = uid_key
                 agents.append({
                     "name": name,
                     "uid": uid,
@@ -245,11 +261,38 @@ class PddTransferHuman:
         import config as cfg
         agent_uid  = agent.get("uid", "")
         agent_csid = agent.get("csid", "")
-        # 每次实时从配置读取最新 anti_content（它可能会刷新）
+        # 每次实时从配置读取最新 anti_content（它会定期更新，不能缓存）
         anti = cfg.get_anti_content(self.shop_id)
+        # request_id 需为毫秒时间戳（抓包确认）
+        request_id = int(time.time() * 1000)
 
         attempts = [
-            # 接口 1：latitude/assign/transferConv（最常用）
+            # 接口 1：plateau/chat/move_conversation（抓包确认可用，优先级最高）
+            {
+                "url": "https://mms.pinduoduo.com/plateau/chat/move_conversation",
+                "json": {
+                    "data": {
+                        "cmd": "move_conversation",
+                        "request_id": request_id,
+                        "conversation": {
+                            "csid": agent_csid,
+                            "uid": buyer_id,
+                            "need_wx": False,
+                            "remark": "无原因直接转移",
+                        },
+                        "anti_content": anti,
+                    },
+                    "client": "WEB",
+                    "anti_content": anti,
+                },
+                # 成功判断：result.result == "ok"
+                "success_check": lambda resp: (
+                    resp.get("success") and
+                    isinstance(resp.get("result"), dict) and
+                    resp["result"].get("result") == "ok"
+                ),
+            },
+            # 接口 2：latitude/assign/transferConv（备用）
             {
                 "url": "https://mms.pinduoduo.com/latitude/assign/transferConv",
                 "json": {
@@ -263,25 +306,7 @@ class PddTransferHuman:
                     "anti_content": anti,
                 },
             },
-            # 接口 2：plateau/chat/move_conversation
-            {
-                "url": "https://mms.pinduoduo.com/plateau/chat/move_conversation",
-                "json": {
-                    "data": {
-                        "cmd": "move_conversation",
-                        "conversation": {
-                            "csid": agent_csid,
-                            "uid": buyer_id,
-                            "need_wx": False,
-                            "remark": "无原因直接转移",
-                        },
-                        "anti_content": anti,
-                    },
-                    "client": "WEB",
-                    "anti_content": anti,
-                },
-            },
-            # 接口 3：chats/transferSession
+            # 接口 3：chats/transferSession（备用）
             {
                 "url": "https://mms.pinduoduo.com/chats/transferSession",
                 "json": {
@@ -293,7 +318,7 @@ class PddTransferHuman:
                     "anti_content": anti,
                 },
             },
-            # 接口 4：assistant/session/transfer
+            # 接口 4：assistant/session/transfer（备用）
             {
                 "url": "https://mms.pinduoduo.com/assistant/session/transfer",
                 "json": {
@@ -305,15 +330,24 @@ class PddTransferHuman:
             },
         ]
 
+        anti_preview = (anti[:20] + "...") if len(anti) > 20 else anti
         for attempt in attempts:
             url = attempt["url"]
+            payload = attempt["json"]
             try:
-                r = sess.post(url, json=attempt["json"], timeout=15)
+                logger.info("转移接口请求: %s | csid=%s uid=%s anti=%s",
+                            url, agent_csid, buyer_id, anti_preview)
+                r = sess.post(url, json=payload, timeout=15)
                 logger.info("转移接口 %s 响应 [%d]: %s", url, r.status_code, r.text[:500])
 
                 if r.status_code == 200:
                     try:
                         resp = r.json()
+                        # 优先用接口自定义的成功判断函数
+                        custom_check = attempt.get("success_check")
+                        if custom_check and custom_check(resp):
+                            return True
+                        # 通用成功判断
                         # success 字段：True 或 1 或 "true"/"ok" 都算成功
                         if resp.get("success") in (True, 1, "true", "ok"):
                             return True
