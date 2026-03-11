@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # pdd_transfer.py - 纯 HTTP API 版本，不启动任何浏览器
+# 直接用 cookies 调用拼多多接口转移会话
 import logging
 import random
-import time
 import requests
 
 logger = logging.getLogger(__name__)
@@ -31,15 +31,17 @@ class PddTransferHuman:
     def _get_session(self) -> requests.Session:
         if self._session is None:
             self._session = requests.Session()
+            anti = self.cookies.get("anti_content", "") or self.cookies.get("ANTI_CONTENT", "")
             self._session.headers.update({
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/120.0.0.0 Safari/537.36"
                 ),
-                "Referer": "https://mms.pinduoduo.com/",
+                "Referer": "https://mms.pinduoduo.com/chat-merchant/index.html",
                 "Origin": "https://mms.pinduoduo.com",
                 "Content-Type": "application/json",
+                "X-Anti-Content": anti,
             })
             for k, v in self.cookies.items():
                 self._session.cookies.set(k, v, domain=".pinduoduo.com")
@@ -104,53 +106,52 @@ class PddTransferHuman:
         """
         url = "https://mms.pinduoduo.com/latitude/assign/getAssignCsList"
         try:
-            r = sess.post(url, json={"wechatCheck": True}, timeout=15)
-            logger.info("[transfer] getAssignCsList 状态码=%d 响应=%s",
-                        r.status_code, r.text[:800])
+            anti = self.cookies.get("anti_content", "")
+            r = sess.post(url, json={"wechatCheck": True, "anti_content": anti}, timeout=15)
+            logger.info("客服列表接口响应 [%d]: %s", r.status_code, r.text[:800])
             if r.status_code != 200:
                 logger.warning("[transfer] 客服列表接口返回非200: %d", r.status_code)
                 return None
             data = r.json()
             if not data.get("success"):
-                logger.warning("[transfer] 客服列表 success=False: %s", data)
+                logger.warning("getAssignCsList 返回 success=False: %s",
+                               data.get("errorMsg") or data.get("error_msg") or str(data)[:300])
                 return None
 
             result = data.get("result") or {}
-            # csList 是 dict: {csId字符串: {...}} 或 list
-            cs_map = result.get("csList") or {}
-            agents = []
+            # 兼容多种字段名（用 is not None 以免空列表被跳过）
+            cs_map = (result.get("csList") if result.get("csList") is not None
+                      else result.get("staffList") if result.get("staffList") is not None
+                      else result.get("onlineList") if result.get("onlineList") is not None
+                      else {})
 
+            if isinstance(cs_map, list):
+                # 有时返回列表而非dict
+                cs_map = {str(i): item for i, item in enumerate(cs_map)}
+
+            agents = []
             if isinstance(cs_map, dict):
                 for uid_key, item in cs_map.items():
                     name = (item.get("csName") or item.get("username") or
-                            item.get("nickname") or uid_key)
-                    # csId / id 都可能是数字型客服ID
-                    csid = str(item.get("csId") or item.get("id") or uid_key)
+                            item.get("nickname") or item.get("staffName") or uid_key)
+                    uid = str(item.get("id") or item.get("uid") or uid_key)
+                    csid = str(item.get("csId") or item.get("csid") or uid_key)
                     agents.append({
                         "name": name,
+                        "uid": uid,
                         "csid": csid,
-                        "uid": uid_key,
-                        "unreplied": item.get("unreplyNum", 0),
-                        "raw": item,
-                    })
-            elif isinstance(cs_map, list):
-                for item in cs_map:
-                    name = (item.get("csName") or item.get("username") or
-                            item.get("nickname") or str(item.get("csId", "")))
-                    csid = str(item.get("csId") or item.get("id") or "")
-                    agents.append({
-                        "name": name,
-                        "csid": csid,
-                        "uid": csid,
                         "unreplied": item.get("unreplyNum", 0),
                         "raw": item,
                     })
 
             logger.info("[transfer] 解析到 %d 个客服", len(agents))
-            return agents if agents else []
+            if agents:
+                return agents
+            logger.warning("客服列表为空，接口原始数据: %s", str(data)[:500])
+            return []
 
         except Exception as e:
-            logger.error("[transfer] getAssignCsList 异常: %s", e, exc_info=True)
+            logger.warning("客服列表接口失败: %s", e)
             return None
 
     # ------------------------------------------------------------------
@@ -159,73 +160,63 @@ class PddTransferHuman:
 
     def _do_transfer(self, sess: requests.Session, agent: dict,
                      buyer_id: str, order_sn: str, buyer_name: str) -> bool:
-        csid = agent.get("csid", "")
-        uid  = agent.get("uid", "")
-        name = agent.get("name", "")
+        agent_uid  = agent.get("uid", "")
+        agent_csid = agent.get("csid", "")
+        anti = self.cookies.get("anti_content", "")
 
-        # 注意：拼多多官方字段名区分大小写
-        # latitude/assign/transferConv 是最真实的转移接口
         attempts = [
-            # ── 接口1: latitude/assign/transferConv（最可能有效）──
+            # 接口 1：latitude/assign/transferConv（最常用）
             {
-                "url":  "https://mms.pinduoduo.com/latitude/assign/transferConv",
+                "url": "https://mms.pinduoduo.com/latitude/assign/transferConv",
                 "json": {
-                    "csId":       csid,           # 目标客服ID（数字字符串）
-                    "buyerId":    buyer_id,        # 买家ID
-                    "orderSn":    order_sn,
-                    "buyerName":  buyer_name,
+                    "toUid":       agent_uid,
+                    "toCsId":      agent_csid,
+                    "toBuyerId":   buyer_id,
+                    "buyerId":     buyer_id,
+                    "orderSn":     order_sn,
+                    "buyerName":   buyer_name,
                     "transReason": 10000,
+                    "anti_content": anti,
                 },
             },
-            # ── 接口2: 同上，字段名变体 ──
+            # 接口 2：plateau/chat/move_conversation
             {
-                "url":  "https://mms.pinduoduo.com/latitude/assign/transferConv",
-                "json": {
-                    "toUid":      csid,
-                    "toBuyerId":  buyer_id,
-                    "buyerId":    buyer_id,
-                    "orderSn":    order_sn,
-                    "buyerName":  buyer_name,
-                    "transReason": 10000,
-                },
-            },
-            # ── 接口3: plateau/chat/move_conversation（类似JS版本）──
-            {
-                "url":  "https://mms.pinduoduo.com/plateau/chat/move_conversation",
+                "url": "https://mms.pinduoduo.com/plateau/chat/move_conversation",
                 "json": {
                     "data": {
                         "cmd": "move_conversation",
-                        "request_id": int(time.time() * 1000),
                         "conversation": {
-                            "csid":    csid,
-                            "uid":     buyer_id,
+                            "csid": agent_csid,
+                            "uid": buyer_id,
                             "need_wx": False,
-                            "remark":  "无原因直接转移",
+                            "remark": "无原因直接转移",
                         },
-                        "anti_content": "",
+                        "anti_content": anti,
                     },
                     "client": "WEB",
-                    "anti_content": "",
+                    "anti_content": anti,
                 },
             },
-            # ── 接口4: chats/transferSession ──
+            # 接口 3：chats/transferSession
             {
-                "url":  "https://mms.pinduoduo.com/chats/transferSession",
+                "url": "https://mms.pinduoduo.com/chats/transferSession",
                 "json": {
-                    "staffId":   csid,
-                    "buyerId":   buyer_id,
-                    "orderSn":   order_sn,
-                    "buyerName": buyer_name,
+                    "staffId":    agent_uid,
+                    "staffCsId":  agent_csid,
+                    "buyerId":    buyer_id,
+                    "orderSn":    order_sn,
+                    "buyerName":  buyer_name,
+                    "anti_content": anti,
                 },
             },
-            # ── 接口5: assistant/session/transfer（form-data）──
+            # 接口 4：assistant/session/transfer
             {
-                "url":  "https://mms.pinduoduo.com/assistant/session/transfer",
-                "data": {
-                    "staffId":   csid,
-                    "buyerId":   buyer_id,
-                    "orderSn":   order_sn,
-                    "buyerName": buyer_name,
+                "url": "https://mms.pinduoduo.com/assistant/session/transfer",
+                "json": {
+                    "staffId":    agent_uid,
+                    "buyerId":    buyer_id,
+                    "orderSn":    order_sn,
+                    "buyerName":  buyer_name,
                 },
             },
         ]
@@ -233,39 +224,31 @@ class PddTransferHuman:
         for attempt in attempts:
             url = attempt["url"]
             try:
-                if "json" in attempt:
-                    r = sess.post(url, json=attempt["json"], timeout=15)
-                else:
-                    # form-data：临时修改 Content-Type
-                    hdrs = {"Content-Type": "application/x-www-form-urlencoded"}
-                    r = sess.post(url, data=attempt["data"], headers=hdrs, timeout=15)
-
-                logger.info("[transfer] 接口 %s 状态=%d 响应=%s",
-                            url, r.status_code, r.text[:400])
+                r = sess.post(url, json=attempt["json"], timeout=15)
+                logger.info("转移接口 %s 响应 [%d]: %s", url, r.status_code, r.text[:500])
 
                 if r.status_code == 200:
                     try:
                         resp = r.json()
-                        ok = (
-                            resp.get("success") is True
-                            or resp.get("errorCode") in (0, 1000000)
-                            or resp.get("code") in (0, 200)
-                            or (isinstance(resp.get("result"), dict)
-                                and resp["result"].get("result") == "ok")
-                        )
-                        if ok:
-                            logger.info("[transfer] 接口 %s 转移成功！", url)
+                        # 严格的成功判断
+                        error_code = resp.get("errorCode") or resp.get("error_code") or resp.get("code")
+                        if resp.get("success") is True:
                             return True
-                        else:
-                            logger.warning("[transfer] 接口 %s 返回但未成功: %s", url, resp)
-                    except Exception:
-                        # 非JSON但200，谨慎视为成功
-                        logger.warning("[transfer] 接口 %s 非JSON响应但200，视为成功尝试", url)
+                        if error_code in (0, 1000000, 200):
+                            return True
+                        # 检查嵌套结果
+                        result = resp.get("result")
+                        if isinstance(result, dict) and result.get("result") == "ok":
+                            return True
+                        logger.warning("转移接口返回失败: errorCode=%s, msg=%s",
+                                       error_code,
+                                       resp.get("errorMsg") or resp.get("error_msg") or resp.get("msg", ""))
+                    except (ValueError, KeyError):
+                        # 非 JSON 响应但状态码 200，也视为成功
                         return True
             except Exception as e:
-                logger.warning("[transfer] 接口 %s 请求异常: %s", url, e)
+                logger.warning("转移接口失败 %s: %s", url, e)
 
-        logger.error("[transfer] 所有接口均失败，buyer_id=%s csid=%s", buyer_id, csid)
         return False
 
     # ------------------------------------------------------------------
