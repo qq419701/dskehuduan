@@ -89,7 +89,6 @@ class PddSettingsPage(QWidget):
 
         # 三个卡片
         layout.addWidget(self._build_transfer_card())
-        layout.addWidget(self._build_pronunciation_card())
         layout.addWidget(self._build_order_card())
         layout.addWidget(self._build_refund_card())
         layout.addStretch()
@@ -151,15 +150,80 @@ class PddSettingsPage(QWidget):
         strat_layout.addStretch()
         layout.addLayout(strat_layout)
 
-        # 指定客服账号
-        target_label = QLabel("指定客服账号（选填）")
-        target_label.setStyleSheet("font-size:13px; color:#cccccc; font-weight:bold;")
-        layout.addWidget(target_label)
+        # 指定转人工客服（按店铺配置）
+        agent_section_label = QLabel("指定转人工客服（按店铺配置）")
+        agent_section_label.setStyleSheet("font-size:13px; color:#cccccc; font-weight:bold;")
+        layout.addWidget(agent_section_label)
 
-        self._target_input = QLineEdit()
-        self._target_input.setPlaceholderText("留空 = 自动按策略选择；填写后优先转给指定账号")
-        self._target_input.setStyleSheet(INPUT_STYLE)
-        layout.addWidget(self._target_input)
+        agent_hint = QLabel("为每个拼多多店铺单独指定转人工客服账号，留空则按上方策略自动选择")
+        agent_hint.setStyleSheet(SUB_STYLE)
+        layout.addWidget(agent_hint)
+
+        active_shops = cfg.get_active_shops()
+        pdd_shops = [s for s in active_shops if s.get('platform', 'pdd') == 'pdd']
+
+        shops_widget = QWidget()
+        shops_layout = QVBoxLayout(shops_widget)
+        shops_layout.setContentsMargins(0, 4, 0, 0)
+        shops_layout.setSpacing(8)
+
+        if pdd_shops:
+            for shop in pdd_shops:
+                shop_id = str(shop.get('id', ''))
+                shop_name = shop.get('name', '未知店铺')
+
+                row_widget = QWidget()
+                row = QHBoxLayout(row_widget)
+                row.setContentsMargins(0, 0, 0, 0)
+                row.setSpacing(8)
+
+                name_label = QLabel(shop_name)
+                name_label.setStyleSheet("color:#cccccc; font-size:13px;")
+                name_label.setFixedWidth(180)
+                name_label.setWordWrap(True)
+
+                agent_edit = QLineEdit()
+                agent_edit.setPlaceholderText("客服账号名（留空自动分配）")
+                agent_edit.setStyleSheet(INPUT_STYLE)
+                agent_edit.setText(cfg.get_shop_transfer_agent(shop_id))
+
+                save_btn = QPushButton("💾 保存")
+                save_btn.setFixedWidth(72)
+                save_btn.setStyleSheet(
+                    "QPushButton{background:#0078d4;color:white;border:none;"
+                    "border-radius:5px;padding:5px 12px;font-size:12px;}"
+                    "QPushButton:hover{background:#106ebe;}"
+                    "QPushButton:pressed{background:#005a9e;}"
+                )
+
+                status_label = QLabel("")
+                status_label.setStyleSheet("font-size:11px; color:#888888;")
+
+                def _make_save_handler(shop_id, agent_edit, status_label):
+                    def _handler():
+                        name = agent_edit.text().strip()
+                        ok = cfg.save_shop_transfer_agent(shop_id, name)
+                        if ok:
+                            status_label.setText("✅ 已保存" if name else "✅ 已清除")
+                            logger.info("店铺 %s 转人工客服已保存: %s", shop_id, name or "(自动分配)")
+                        else:
+                            status_label.setText("❌ 保存失败")
+                    return _handler
+
+                save_btn.clicked.connect(_make_save_handler(shop_id, agent_edit, status_label))
+
+                row.addWidget(name_label)
+                row.addWidget(agent_edit)
+                row.addWidget(save_btn)
+                row.addWidget(status_label)
+                row.addStretch()
+                shops_layout.addWidget(row_widget)
+        else:
+            empty_label = QLabel("暂无激活的拼多多店铺，请先在设置页同步并激活店铺")
+            empty_label.setStyleSheet("color:#666666; font-size:12px;")
+            shops_layout.addWidget(empty_label)
+
+        layout.addWidget(shops_widget)
 
         # 触发后立即发送的话术
         reply_label = QLabel("转接时立即发送的话术")
@@ -200,102 +264,6 @@ class PddSettingsPage(QWidget):
         layout.addLayout(btn_layout)
 
         return card
-
-    def _build_pronunciation_card(self) -> QFrame:
-        """转人工发音规则配置卡片（v2.1 新增）"""
-        card = _make_card()
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 16, 20, 20)
-        layout.setSpacing(14)
-
-        # 标题行
-        hdr = QHBoxLayout()
-        icon_title = QLabel("🔊  转人工发音规则配置")
-        icon_title.setStyleSheet(HEADER_STYLE)
-        badge = QLabel("✅ v2.1 新增")
-        badge.setStyleSheet(BADGE_ONLINE)
-        hdr.addWidget(icon_title)
-        hdr.addStretch()
-        hdr.addWidget(badge)
-        layout.addLayout(hdr)
-
-        desc = QLabel(
-            "配置买家消息中触发\u201c转人工\u201d意图的关键词/短语，支持直接输入规则（替代规则引擎配置方式）"
-        )
-        desc.setStyleSheet(SUB_STYLE)
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
-
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet("color:#3a3a3a;")
-        layout.addWidget(line)
-
-        # 触发关键词
-        kw_label = QLabel("触发关键词（每行一个，支持模糊匹配）")
-        kw_label.setStyleSheet("font-size:13px; color:#cccccc; font-weight:bold;")
-        layout.addWidget(kw_label)
-
-        from PyQt6.QtWidgets import QTextEdit
-        self._pronunciation_keywords = QTextEdit()
-        self._pronunciation_keywords.setPlaceholderText(
-            "人工\n客服\n转人工\n我要投诉\n联系客服"
-        )
-        self._pronunciation_keywords.setFixedHeight(120)
-        self._pronunciation_keywords.setStyleSheet(
-            "QTextEdit{background:#1e1e1e;color:#ddd;border:1px solid #555;"
-            "border-radius:5px;padding:6px 10px;font-size:13px;}"
-            "QTextEdit:focus{border:1px solid #0078d4;}"
-        )
-        layout.addWidget(self._pronunciation_keywords)
-
-        # 说明文字
-        tip = QLabel(
-            "💡 填写后，客户端轮询到 transfer_human 任务时会优先使用此处配置的关键词判断，"
-            "无需在 aikefu 后台单独配置规则引擎。"
-        )
-        tip.setStyleSheet("font-size:11px; color:#666666;")
-        tip.setWordWrap(True)
-        layout.addWidget(tip)
-
-        # 保存按钮
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        save_btn = QPushButton("💾  保存发音规则")
-        save_btn.setStyleSheet(SAVE_BTN_STYLE)
-        save_btn.clicked.connect(self._save_pronunciation_settings)
-        btn_layout.addWidget(save_btn)
-        layout.addLayout(btn_layout)
-
-        # 读取已保存的关键词
-        self._load_pronunciation_settings()
-
-        return card
-
-    def _load_pronunciation_settings(self):
-        """读取已保存的发音规则关键词"""
-        try:
-            transfer = cfg.get_pdd_transfer_settings()
-            keywords = transfer.get("pronunciation_keywords", "")
-            if keywords:
-                self._pronunciation_keywords.setPlainText(keywords)
-        except Exception:
-            pass
-
-    def _save_pronunciation_settings(self):
-        """保存发音规则关键词"""
-        keywords = self._pronunciation_keywords.toPlainText().strip()
-        transfer = cfg.get_pdd_transfer_settings()
-        transfer["pronunciation_keywords"] = keywords
-        ok = cfg.save_pdd_transfer_settings(transfer)
-        if ok:
-            QMessageBox.information(
-                self, "保存成功",
-                "✅ 发音规则已保存！\n\n关键词将在下次转人工任务触发时生效。"
-            )
-            logger.info("发音规则关键词已保存，共 %d 行", len(keywords.splitlines()))
-        else:
-            QMessageBox.warning(self, "保存失败", "❌ 配置文件写入失败，请检查权限。")
 
     def _build_order_card(self) -> QFrame:
         """同步订单设置卡片（预留/灰显）"""
@@ -384,9 +352,6 @@ class PddSettingsPage(QWidget):
         radio = self._strat_radios.get(strategy, self._strat_radios["least_busy"])
         radio.setChecked(True)
 
-        # 指定客服
-        self._target_input.setText(transfer.get("target_account", ""))
-
         # 话术
         self._transfer_reply_input.setText(
             transfer.get("reply", cfg.DEFAULT_TRANSFER_REPLY)
@@ -403,7 +368,6 @@ class PddSettingsPage(QWidget):
 
         settings = {
             "strategy":       strategy,
-            "target_account": self._target_input.text().strip(),
             "reply":          self._transfer_reply_input.text().strip()
                               or cfg.DEFAULT_TRANSFER_REPLY,
             "timeout":        self._timeout_spin.value(),
@@ -414,7 +378,6 @@ class PddSettingsPage(QWidget):
                 self, "保存成功",
                 "✅ 转人工设置已保存！\n\n下次触发转人工时将使用新配置。"
             )
-            logger.info("转人工设置已保存: strategy=%s, target=%s",
-                        strategy, self._target_input.text().strip())
+            logger.info("转人工设置已保存: strategy=%s", strategy)
         else:
             QMessageBox.warning(self, "保存失败", "❌ 配置文件写入失败，请检查权限。")
