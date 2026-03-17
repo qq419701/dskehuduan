@@ -265,3 +265,28 @@ def save_anti_content(shop_id: str, anti: str) -> bool:
         conf["pdd_anti_content"] = {}
     conf["pdd_anti_content"][str(shop_id)] = anti
     return save_config(conf)
+
+
+# ── 拼多多各店铺转人工客服配置 ─────────────────────────────────────────────────
+
+
+def get_shop_transfer_agent(shop_id: str) -> str:
+    """
+    获取指定拼多多店铺的转人工指定客服账号名。
+    返回空字符串表示未指定，由分配策略自动选择。
+    """
+    conf = load_config()
+    agents = conf.get("pdd_shop_transfer_agents", {})
+    return agents.get(str(shop_id), "")
+
+
+def save_shop_transfer_agent(shop_id: str, agent_name: str) -> bool:
+    """
+    保存指定拼多多店铺的转人工客服账号名。
+    agent_name 为空字符串表示清除（不指定），由分配策略自动选择。
+    """
+    conf = load_config()
+    if "pdd_shop_transfer_agents" not in conf:
+        conf["pdd_shop_transfer_agents"] = {}
+    conf["pdd_shop_transfer_agents"][str(shop_id)] = agent_name.strip()
+    return save_config(conf)

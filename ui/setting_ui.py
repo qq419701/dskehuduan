@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFormLayout, QGroupBox, QMessageBox,
     QCheckBox, QScrollArea, QListWidget, QListWidgetItem,
-    QSizePolicy,
+    QSizePolicy, QComboBox,
 )
 
 import config as cfg
@@ -149,6 +149,63 @@ class SettingPage(QWidget):
         hint = QLabel('勾选后该店铺将自动注册插件并轮询任务')
         hint.setStyleSheet('color:#888;font-size:11px;')
         shop_v.addWidget(hint)
+
+        # ── 转人工客服配置 ──────────────────────────────────────
+        transfer_sep = QLabel('─────────────────────────────────────')
+        transfer_sep.setStyleSheet('color:#e0e0e0; font-size:10px;')
+        shop_v.addWidget(transfer_sep)
+
+        transfer_title = QLabel('🔀 转人工客服配置（仅拼多多）')
+        transfer_title.setStyleSheet('color:#555; font-size:12px; font-weight:bold;')
+        shop_v.addWidget(transfer_title)
+
+        transfer_hint = QLabel('为每个店铺单独指定转人工时的客服账号名，留空则自动分配')
+        transfer_hint.setStyleSheet('color:#999; font-size:11px;')
+        shop_v.addWidget(transfer_hint)
+
+        agent_row = QHBoxLayout()
+        agent_row.setSpacing(8)
+
+        self.agent_shop_combo = QComboBox()
+        self.agent_shop_combo.setFixedWidth(160)
+        self.agent_shop_combo.setStyleSheet(
+            'QComboBox{background:#fff;border:1px solid #d0d0d0;border-radius:4px;'
+            'padding:4px 8px;color:#222;}'
+            'QComboBox::drop-down{border:none;}'
+            'QComboBox QAbstractItemView{background:#fff;border:1px solid #d0d0d0;}'
+        )
+        self.agent_shop_combo.currentIndexChanged.connect(self._on_agent_shop_changed)
+
+        self.agent_name_edit = QLineEdit()
+        self.agent_name_edit.setPlaceholderText('输入客服账号名（非备注）')
+        self.agent_name_edit.setStyleSheet(
+            'QLineEdit{background:#fff;border:1px solid #d0d0d0;border-radius:4px;'
+            'padding:4px 8px;color:#222;}'
+            'QLineEdit:focus{border:1px solid #1890ff;}'
+        )
+
+        self.agent_save_btn = QPushButton('💾 保存')
+        self.agent_save_btn.setFixedWidth(72)
+        self.agent_save_btn.setFixedHeight(30)
+        self.agent_save_btn.setStyleSheet(
+            'QPushButton{background:#52c41a;color:white;border:none;border-radius:4px;padding:4px 10px;}'
+            'QPushButton:hover{background:#73d13d;}'
+            'QPushButton:pressed{background:#389e0d;}'
+        )
+        self.agent_save_btn.clicked.connect(self._save_agent_setting)
+
+        self.agent_status_label = QLabel('')
+        self.agent_status_label.setStyleSheet('color:#555; font-size:11px;')
+
+        agent_row.addWidget(QLabel('店铺：'))
+        agent_row.addWidget(self.agent_shop_combo)
+        agent_row.addWidget(QLabel('客服名：'))
+        agent_row.addWidget(self.agent_name_edit)
+        agent_row.addWidget(self.agent_save_btn)
+        agent_row.addWidget(self.agent_status_label)
+        agent_row.addStretch()
+        shop_v.addLayout(agent_row)
+
         layout.addWidget(shop_group)
 
         # ── 任务执行器全局设置 ──────────────────────────────────────────────
@@ -229,6 +286,47 @@ class SettingPage(QWidget):
             placeholder.setForeground(Qt.GlobalColor.gray)
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             self.shop_list.addItem(placeholder)
+
+        # 渲染完后刷新转人工客服配置的店铺下拉框
+        self._refresh_agent_combo()
+
+    def _refresh_agent_combo(self):
+        """刷新转人工客服配置的店铺下拉框（只显示拼多多店铺）"""
+        self.agent_shop_combo.blockSignals(True)
+        self.agent_shop_combo.clear()
+        pdd_shops = [s for s in self._all_shops if s.get('platform', 'pdd') == 'pdd']
+        for shop in pdd_shops:
+            shop_id = str(shop.get('id', ''))
+            name = shop.get('name', '未知店铺')
+            self.agent_shop_combo.addItem(name, userData=shop_id)
+        self.agent_shop_combo.blockSignals(False)
+        # 触发一次加载当前选中店铺的客服名
+        self._on_agent_shop_changed()
+
+    def _on_agent_shop_changed(self):
+        """下拉框切换店铺时，加载该店铺已保存的客服名"""
+        shop_id = self.agent_shop_combo.currentData()
+        if not shop_id:
+            self.agent_name_edit.setText('')
+            return
+        agent = cfg.get_shop_transfer_agent(shop_id)
+        self.agent_name_edit.setText(agent or '')
+        self.agent_status_label.setText('')
+
+    def _save_agent_setting(self):
+        """保存当前选中店铺的客服名配置"""
+        shop_id = self.agent_shop_combo.currentData()
+        if not shop_id:
+            self.agent_status_label.setText('❌ 请先同步并选择店铺')
+            return
+        agent_name = self.agent_name_edit.text().strip()
+        if cfg.save_shop_transfer_agent(shop_id, agent_name):
+            if agent_name:
+                self.agent_status_label.setText(f'✅ 已保存：{agent_name}')
+            else:
+                self.agent_status_label.setText('✅ 已清除（自动分配）')
+        else:
+            self.agent_status_label.setText('❌ 保存失败')
 
     def _sync_shops(self):
         """从服务端同步店铺列表"""
