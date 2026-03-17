@@ -341,8 +341,18 @@ class AikefuTaskRunner:
         buyer_id = str(payload.get("buyer_id", ""))
         buyer_name = str(payload.get("buyer_name", ""))
         order_sn = str(payload.get("order_sn", ""))
-        target_agent = str(payload.get("target_agent", ""))
+        # 优先级：任务payload指定 > 店铺专属配置 > 全局配置兜底
+        target_agent = (
+            str(payload.get("target_agent", "")).strip()
+            or config.get_shop_transfer_agent(self.shop_id)
+            or ""
+        )
+        # strategy 仅在 target_agent 为空时才真正生效（target_agent 优先）
         strategy = payload.get("strategy") or config.get_transfer_strategy()
+        logger.info(
+            "转人工参数: shop_id=%s target_agent=%r strategy=%s buyer_id=%s",
+            self.shop_id, target_agent, strategy, buyer_id,
+        )
 
         if not self.shop_cookies:
             return {
