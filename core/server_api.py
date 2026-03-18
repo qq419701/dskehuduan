@@ -137,27 +137,37 @@ class ServerAPI:
             logger.error("客户端登录失败: %s", e)
             return {"success": False, "error": str(e)}
 
-    def client_get_shops(self, client_token: str) -> list:
+    def client_get_shops(self, client_token: str, known_shop_ids: list = None) -> dict:
         """
         获取登录用户名下的所有店铺（含 shop_token）
         GET /api/client/shops
         Header: X-Client-Token: <client_token>
-        返回: [{"id":1, "name":"店铺名", "shop_token":"xxx", "platform":"pdd", ...}]
+        可选参数: known_shop_ids (list[int]) - 本地已知的店铺ID列表，服务端据此返回已删除的ID
+        返回: {"shops": [...], "deleted_shop_ids": [...]}
         """
+        params = {}
+        if known_shop_ids:
+            params["known_shop_ids"] = ",".join(str(i) for i in known_shop_ids)
         try:
             resp = self.session.get(
                 f"{self.base_url}/api/client/shops",
                 headers={"X-Client-Token": client_token},
+                params=params,
                 timeout=DEFAULT_TIMEOUT,
             )
             resp.raise_for_status()
             data = resp.json()
             if isinstance(data, list):
-                return data
-            return data.get("shops", []) if isinstance(data, dict) else []
+                # 旧版服务端直接返回列表
+                return {"shops": data, "deleted_shop_ids": []}
+            elif isinstance(data, dict):
+                shops = data.get("shops", [])
+                deleted = data.get("deleted_shop_ids", [])
+                return {"shops": shops, "deleted_shop_ids": deleted}
+            return {"shops": [], "deleted_shop_ids": []}
         except requests.RequestException as e:
             logger.error("获取店铺列表失败: %s", e)
-            return []
+            return {"shops": [], "deleted_shop_ids": []}
 
     def client_logout(self, client_token: str) -> dict:
         """
