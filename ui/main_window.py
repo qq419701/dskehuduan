@@ -6,9 +6,10 @@
 """
 import asyncio
 import logging
+import threading
 import time
 
-from PyQt6.QtCore import Qt, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon, QMenu
 
 try:
@@ -136,6 +137,8 @@ class ChannelWorker(QThread):
 class MainWindow(FluentWindow):
     """爱客服采集客户端主窗口（v2.0）"""
 
+    _deleted_shops_signal = pyqtSignal(list)
+
     def __init__(self):
         super().__init__()
         self.server_api: ServerAPI = None
@@ -146,6 +149,15 @@ class MainWindow(FluentWindow):
         self._init_ui()
         self._setup_tray()
         self._start_task_runners()
+
+        # 定时同步已删除店铺
+        self._deleted_shops_signal.connect(self._apply_deleted_shops)
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setInterval(5 * 60 * 1000)  # 5分钟
+        self._sync_timer.timeout.connect(self._sync_deleted_shops)
+        self._sync_timer.start()
+        # 启动时延迟10秒执行一次，等待UI完全初始化
+        QTimer.singleShot(10_000, self._sync_deleted_shops)
 
     def _check_login(self):
         """检查登录状态，未登录则弹出登录弹窗"""
@@ -381,6 +393,35 @@ class MainWindow(FluentWindow):
         if self._multi_runner and cookies:
             self._multi_runner.update_shop_cookies(shop_id, cookies)
             logger.info("已更新店铺 %s 的 cookies 到 task_runner", shop_id)
+
+    def _sync_deleted_shops(self):
+        """定时从服务端同步已删除的店铺，自动清理本地配置和UI"""
+        def _do_sync():
+            client_token = cfg.get_client_token()
+            if not client_token or not self.server_api:
+                return
+            known_shops = cfg.get_active_shops()
+            known_ids = [s.get("id") for s in known_shops if s.get("id")]
+            if not known_ids:
+                return
+            try:
+                result = self.server_api.client_get_shops(client_token, known_shop_ids=known_ids)
+                deleted_ids = result.get("deleted_shop_ids", [])
+                if deleted_ids:
+                    logger.info("检测到服务端已删除的店铺: %s，开始自动清理", deleted_ids)
+                    self._deleted_shops_signal.emit(deleted_ids)
+            except Exception as e:
+                logger.warning("同步已删除店铺失败: %s", e)
+
+        threading.Thread(target=_do_sync, daemon=True).start()
+
+    def _apply_deleted_shops(self, deleted_ids: list):
+        """在主线程中处理已删除店铺的清理（由后台线程通过信号触发）"""
+        for shop_id in deleted_ids:
+            self._stop_shop_by_id(str(shop_id))
+        cfg.remove_shops_by_ids(deleted_ids)
+        self.shop_page.load_shops()
+        logger.info("已自动清理已删除店铺: %s", deleted_ids)
 
     def closeEvent(self, event):
         event.ignore()

@@ -5,6 +5,7 @@
 """
 import os
 import json
+import logging
 import uuid
 from typing import Optional
 
@@ -92,6 +93,26 @@ def save_active_shops(shops: list) -> bool:
     cfg = load_config()
     cfg["active_shops"] = shops
     return save_config(cfg)
+
+
+def remove_shops_by_ids(shop_ids: list):
+    """从本地配置中移除指定ID的店铺（服务端已删除时调用）"""
+    if not shop_ids:
+        return
+    ids_to_remove = set(str(sid) for sid in shop_ids)
+    data = load_config()
+    shops = data.get("active_shops", [])
+    new_shops = [
+        s for s in shops
+        if str(s.get("id", s.get("shop_id", ""))) not in ids_to_remove
+    ]
+    removed = len(shops) - len(new_shops)
+    if removed > 0:
+        data["active_shops"] = new_shops
+        save_config(data)
+        logging.getLogger(__name__).info(
+            "已从本地配置移除 %d 个已删除店铺: %s", removed, list(ids_to_remove)
+        )
 
 
 def get_notify_enabled() -> bool:

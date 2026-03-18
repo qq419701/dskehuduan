@@ -64,11 +64,9 @@ class SyncShopsThread(QThread):
 
     def run(self):
         api = ServerAPI(base_url=self._server_url)
-        shops = api.client_get_shops(self._client_token)
-        if shops is not None:
-            self.result.emit(True, shops, "")
-        else:
-            self.result.emit(False, [], "获取店铺列表失败")
+        result = api.client_get_shops(self._client_token)
+        shops = result.get("shops", [])
+        self.result.emit(True, shops, "")
 
 
 class SettingPage(QWidget):
