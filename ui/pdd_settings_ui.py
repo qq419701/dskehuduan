@@ -5,7 +5,7 @@
 配置保存到 ~/.aikefu-client/config.json 的 pdd_settings 字段
 """
 import logging
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QRadioButton, QButtonGroup, QFrame, QScrollArea,
@@ -35,6 +35,7 @@ QLineEdit {
 QLineEdit:focus { border:1px solid #0078d4; }
 """
 RADIO_STYLE  = "color:#cccccc; font-size:13px;"
+SHOP_REFRESH_INTERVAL_MS = 10_000
 SAVE_BTN_STYLE = """
 QPushButton {
     background:#0078d4; color:white; border:none;
@@ -151,79 +152,41 @@ class PddSettingsPage(QWidget):
         layout.addLayout(strat_layout)
 
         # 指定转人工客服（按店铺配置）
+        agent_section_row = QHBoxLayout()
         agent_section_label = QLabel("指定转人工客服（按店铺配置）")
         agent_section_label.setStyleSheet("font-size:13px; color:#cccccc; font-weight:bold;")
-        layout.addWidget(agent_section_label)
+        refresh_btn = QPushButton("🔄 刷新")
+        refresh_btn.setFixedWidth(72)
+        refresh_btn.setStyleSheet(
+            "QPushButton{background:#3a3a3a;color:#cccccc;border:none;"
+            "border-radius:5px;padding:3px 10px;font-size:12px;}"
+            "QPushButton:hover{background:#4a4a4a;}"
+            "QPushButton:pressed{background:#2a2a2a;}"
+        )
+        refresh_btn.clicked.connect(self._refresh_agent_shops)
+        agent_section_row.addWidget(agent_section_label)
+        agent_section_row.addStretch()
+        agent_section_row.addWidget(refresh_btn)
+        layout.addLayout(agent_section_row)
 
         agent_hint = QLabel("为每个拼多多店铺单独指定转人工客服账号，留空则按上方策略自动选择")
         agent_hint.setStyleSheet(SUB_STYLE)
         layout.addWidget(agent_hint)
 
-        active_shops = cfg.get_active_shops()
-        pdd_shops = [s for s in active_shops if s.get('platform', 'pdd') == 'pdd']
+        self._agent_shops_container = QWidget()
+        self._agent_shops_layout = QVBoxLayout(self._agent_shops_container)
+        self._agent_shops_layout.setContentsMargins(0, 4, 0, 0)
+        self._agent_shops_layout.setSpacing(8)
 
-        shops_widget = QWidget()
-        shops_layout = QVBoxLayout(shops_widget)
-        shops_layout.setContentsMargins(0, 4, 0, 0)
-        shops_layout.setSpacing(8)
+        self._refresh_agent_shops()
 
-        if pdd_shops:
-            for shop in pdd_shops:
-                shop_id = str(shop.get('id', ''))
-                shop_name = shop.get('name', '未知店铺')
+        layout.addWidget(self._agent_shops_container)
 
-                row_widget = QWidget()
-                row = QHBoxLayout(row_widget)
-                row.setContentsMargins(0, 0, 0, 0)
-                row.setSpacing(8)
-
-                name_label = QLabel(shop_name)
-                name_label.setStyleSheet("color:#cccccc; font-size:13px;")
-                name_label.setFixedWidth(180)
-                name_label.setWordWrap(True)
-
-                agent_edit = QLineEdit()
-                agent_edit.setPlaceholderText("客服账号名（留空自动分配）")
-                agent_edit.setStyleSheet(INPUT_STYLE)
-                agent_edit.setText(cfg.get_shop_transfer_agent(shop_id))
-
-                save_btn = QPushButton("💾 保存")
-                save_btn.setFixedWidth(72)
-                save_btn.setStyleSheet(
-                    "QPushButton{background:#0078d4;color:white;border:none;"
-                    "border-radius:5px;padding:5px 12px;font-size:12px;}"
-                    "QPushButton:hover{background:#106ebe;}"
-                    "QPushButton:pressed{background:#005a9e;}"
-                )
-
-                status_label = QLabel("")
-                status_label.setStyleSheet("font-size:11px; color:#888888;")
-
-                def _make_save_handler(shop_id, agent_edit, status_label):
-                    def _handler():
-                        name = agent_edit.text().strip()
-                        ok = cfg.save_shop_transfer_agent(shop_id, name)
-                        if ok:
-                            status_label.setText("✅ 已保存" if name else "✅ 已清除")
-                            logger.info("店铺 %s 转人工客服已保存: %s", shop_id, name or "(自动分配)")
-                        else:
-                            status_label.setText("❌ 保存失败")
-                    return _handler
-
-                save_btn.clicked.connect(_make_save_handler(shop_id, agent_edit, status_label))
-
-                row.addWidget(name_label)
-                row.addWidget(agent_edit)
-                row.addWidget(save_btn)
-                row.addWidget(status_label)
-                row.addStretch()
-                shops_layout.addWidget(row_widget)
-        else:
-            empty_label = QLabel("暂无激活的拼多多店铺，请先在设置页同步并激活店铺")
-            empty_label.setStyleSheet("color:#666666; font-size:12px;")
-            shops_layout.addWidget(empty_label)
-
-        layout.addWidget(shops_widget)
+        # 自动刷新定时器（每 10 秒检查一次店铺列表变化）
+        self._agent_shops_timer = QTimer(self)
+        self._agent_shops_timer.setInterval(SHOP_REFRESH_INTERVAL_MS)
+        self._agent_shops_timer.timeout.connect(self._refresh_agent_shops)
+        self._agent_shops_timer.start()
 
         # 触发后立即发送的话术
         reply_label = QLabel("转接时立即发送的话术")
@@ -343,6 +306,79 @@ class PddSettingsPage(QWidget):
         return card
 
     # ── 配置读写 ─────────────────────────────────────
+    def _refresh_agent_shops(self):
+        """动态刷新「指定转人工客服」的店铺行区域"""
+        active_shops = cfg.get_active_shops()
+        pdd_shops = [s for s in active_shops if s.get('platform', 'pdd') == 'pdd']
+        new_ids = [str(s.get('id', '')) for s in pdd_shops]
+
+        # 对比当前已渲染的 shop_id 列表，无变化则跳过重建（避免 UI 抖动）
+        if hasattr(self, '_agent_shops_ids') and self._agent_shops_ids == new_ids:
+            return
+        self._agent_shops_ids = new_ids
+
+        # 清空现有 widget
+        while self._agent_shops_layout.count():
+            item = self._agent_shops_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if pdd_shops:
+            def _make_save_handler(shop_id, agent_edit, status_label):
+                def _handler():
+                    name = agent_edit.text().strip()
+                    ok = cfg.save_shop_transfer_agent(shop_id, name)
+                    if ok:
+                        status_label.setText("✅ 已保存" if name else "✅ 已清除")
+                        logger.info("店铺 %s 转人工客服已保存: %s", shop_id, name or "(自动分配)")
+                    else:
+                        status_label.setText("❌ 保存失败")
+                return _handler
+
+            for shop in pdd_shops:
+                shop_id = str(shop.get('id', ''))
+                shop_name = shop.get('name', '未知店铺')
+
+                row_widget = QWidget()
+                row = QHBoxLayout(row_widget)
+                row.setContentsMargins(0, 0, 0, 0)
+                row.setSpacing(8)
+
+                name_label = QLabel(shop_name)
+                name_label.setStyleSheet("color:#cccccc; font-size:13px;")
+                name_label.setFixedWidth(180)
+                name_label.setWordWrap(True)
+
+                agent_edit = QLineEdit()
+                agent_edit.setPlaceholderText("客服账号名（留空自动分配）")
+                agent_edit.setStyleSheet(INPUT_STYLE)
+                agent_edit.setText(cfg.get_shop_transfer_agent(shop_id))
+
+                save_btn = QPushButton("💾 保存")
+                save_btn.setFixedWidth(72)
+                save_btn.setStyleSheet(
+                    "QPushButton{background:#0078d4;color:white;border:none;"
+                    "border-radius:5px;padding:5px 12px;font-size:12px;}"
+                    "QPushButton:hover{background:#106ebe;}"
+                    "QPushButton:pressed{background:#005a9e;}"
+                )
+
+                status_label = QLabel("")
+                status_label.setStyleSheet("font-size:11px; color:#888888;")
+
+                save_btn.clicked.connect(_make_save_handler(shop_id, agent_edit, status_label))
+
+                row.addWidget(name_label)
+                row.addWidget(agent_edit)
+                row.addWidget(save_btn)
+                row.addWidget(status_label)
+                row.addStretch()
+                self._agent_shops_layout.addWidget(row_widget)
+        else:
+            empty_label = QLabel("暂无激活的拼多多店铺，请先在设置页同步并激活店铺")
+            empty_label.setStyleSheet("color:#666666; font-size:12px;")
+            self._agent_shops_layout.addWidget(empty_label)
+
     def _load_settings(self):
         """从 config.json 读取已保存的设置"""
         transfer = cfg.get_pdd_transfer_settings()
