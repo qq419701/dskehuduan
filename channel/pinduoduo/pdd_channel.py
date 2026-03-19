@@ -5,6 +5,8 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 from channel.base_channel import BaseChannel
 from channel.pinduoduo.pdd_message import parse_message
+from channel.pinduoduo.pdd_context import get_manager
+from channel.pinduoduo.pdd_context_fetcher import PddContextFetcher
 
 logger = logging.getLogger(__name__)
 HEARTBEAT_INTERVAL = 30
@@ -24,6 +26,16 @@ class PddChannel(BaseChannel):
         self._processed_ids_set = set()
         # 处理锁（防止重复处理）
         self._processing_lock = asyncio.Lock()
+        # 买家上下文管理器（全局单例）
+        self._ctx_manager = get_manager()
+        # 买家订单HTTP采集器
+        self._ctx_fetcher = PddContextFetcher(
+            shop_id=shop_id,
+            cookies=cookies,
+            context_manager=self._ctx_manager,
+            shop_token=shop_info.get('shop_token', '') if shop_info else '',
+        )
+        self._ctx_fetcher_task = None
 
     def _build_ws_url(self):
         version = time.strftime('%Y%m%d%H%M', time.localtime())
@@ -63,6 +75,8 @@ class PddChannel(BaseChannel):
 
     async def run(self):
         if not self._ws: raise RuntimeError('未连接')
+        # 启动买家上下文采集后台任务
+        self._ctx_fetcher_task = asyncio.create_task(self._ctx_fetcher.run())
         try:
             async for raw_msg in self._ws:
                 if not self.is_running: break
@@ -71,6 +85,10 @@ class PddChannel(BaseChannel):
             logger.warning('店铺 %s 连接断开: %s', self.shop_id, e)
         except Exception as e:
             logger.error('店铺 %s 接收异常: %s', self.shop_id, e)
+        finally:
+            self._ctx_fetcher.stop()
+            if self._ctx_fetcher_task:
+                self._ctx_fetcher_task.cancel()
 
     async def _heartbeat_loop(self):
         try:
@@ -97,11 +115,20 @@ class PddChannel(BaseChannel):
 
         buyer_id = parsed.get('buyer_id','')
         content = parsed.get('content','')
+        is_enter_session = parsed.get('is_enter_session', False)
+        source_goods = parsed.get('source_goods')
 
-        # 过滤无效消息
+        # 过滤无效消息（但进入会话通知不过滤，需要更新浏览足迹）
         if not buyer_id or buyer_id in ('4','0',''):
             return
-        if not content and parsed.get('msg_type','text') == 'text':
+        if not content and parsed.get('msg_type','text') == 'text' and not is_enter_session and not source_goods:
+            return
+
+        # 进入会话通知：仅更新上下文，不走消息处理流程
+        if is_enter_session and not content:
+            if source_goods:
+                self._ctx_manager.update_from_message(str(self.shop_id), str(buyer_id), parsed)
+                logger.info('店铺 %s 买家 %s 浏览足迹已捕获: %s', self.shop_id, buyer_id, source_goods.get('goods_name',''))
             return
 
         # 消息去重（用content+buyer_id+时间戳前缀）
@@ -143,17 +170,41 @@ class PddChannel(BaseChannel):
             try: self._message_callback(self.shop_id, msg)
             except Exception: pass
 
-        # 查买家最近订单
-        order_info = {}
-        if self.db_client and buyer_id:
-            try:
-                latest = self.db_client.get_buyer_latest_order(self.shop_id, buyer_id)
-                if latest:
-                    order_info = latest
-                    if not order_id:
-                        order_id = str(latest.get('order_id',''))
-            except Exception as e:
-                logger.debug('查询买家订单失败: %s', e)
+        # ── 步骤1：用消息内容更新买家上下文缓存（订单卡片、商品卡片、浏览足迹）──
+        self._ctx_manager.update_from_message(str(self.shop_id), str(buyer_id), msg)
+
+        # ── 步骤2：触发异步HTTP采集该买家的订单（非阻塞，冷却期内不重复）──
+        if buyer_id:
+            self._ctx_fetcher.request_fetch(buyer_id)
+
+        # ── 步骤3：从上下文管理器获取最新上下文（合并订单+浏览足迹）──
+        buyer_ctx = self._ctx_manager.get_context(str(self.shop_id), str(buyer_id))
+
+        # 补充 order_id（优先用消息自带的，其次用上下文缓存的）
+        if not order_id:
+            order_id = buyer_ctx.get('order_sn', '')
+
+        # 获取 order_info（优先消息自带，其次上下文缓存）
+        order_info = msg.get('order_info') or buyer_ctx.get('order_info') or {}
+
+        # 获取浏览足迹（优先消息自带 source_goods，其次上下文缓存）
+        current_goods = None
+        source_goods = msg.get('source_goods')
+        if source_goods and isinstance(source_goods, dict) and (source_goods.get('goods_id') or source_goods.get('goods_name')):
+            current_goods = {
+                'goods_id': str(source_goods.get('goods_id') or ''),
+                'goods_name': str(source_goods.get('goods_name') or ''),
+                'goods_img': str(source_goods.get('goods_img') or ''),
+            }
+        elif buyer_ctx.get('current_goods'):
+            current_goods = buyer_ctx['current_goods']
+        elif order_info:
+            # 最后从 order_info 中组装商品信息
+            goods_name = str(order_info.get('goods_name') or '')
+            goods_id = str(order_info.get('goods_id') or order_info.get('goodsId') or '')
+            goods_img = str(order_info.get('goods_img') or order_info.get('goodsImg') or '')
+            if goods_name or goods_id:
+                current_goods = {'goods_id': goods_id, 'goods_name': goods_name, 'goods_img': goods_img}
 
         # 入库
         message_id = 0
@@ -192,29 +243,7 @@ class PddChannel(BaseChannel):
 
         if not self.server_api: return
 
-        # 从消息中提取买家当前浏览的商品信息（浏览足迹）
-        # 优先使用消息自带的 source_goods 字段，其次从 order_info 中组装
-        current_goods = None
-        source_goods = msg.get('source_goods')
-        if source_goods and isinstance(source_goods, dict):
-            # 消息中直接携带了浏览足迹商品信息
-            current_goods = {
-                'goods_id': str(source_goods.get('goods_id') or source_goods.get('goodsId') or ''),
-                'goods_name': str(source_goods.get('goods_name') or source_goods.get('goodsName') or ''),
-                'goods_img': str(source_goods.get('goods_img') or source_goods.get('goodsImg') or ''),
-            }
-        elif order_info and isinstance(order_info, dict):
-            # 从订单信息中组装浏览足迹（买家咨询的商品）
-            goods_name = str(order_info.get('goods_name') or '')
-            goods_id = str(order_info.get('goods_id') or order_info.get('goodsId') or '')
-            goods_img = str(order_info.get('goods_img') or order_info.get('goodsImg') or '')
-            if goods_name or goods_id:
-                current_goods = {
-                    'goods_id': goods_id,
-                    'goods_name': goods_name,
-                    'goods_img': goods_img,
-                }
-
+        # ── 步骤4：将消息+完整上下文发送到服务端 ──
         try:
             api_result = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: self.server_api.send_message(
@@ -253,4 +282,10 @@ class PddChannel(BaseChannel):
                     )
             except Exception as e:
                 logger.error('发送AI回复失败: %s', e)
+
+    def update_cookies(self, cookies: dict):
+        """更新cookies（重新登录后调用）"""
+        self.cookies = cookies
+        if hasattr(self, '_ctx_fetcher'):
+            self._ctx_fetcher.update_cookies(cookies)
 
