@@ -19,7 +19,6 @@ import json
 import os
 import sys
 import time
-import traceback
 from pathlib import Path
 
 import aiohttp
@@ -80,7 +79,7 @@ def build_probes(buyer_id: str) -> list:
 
     # ── 2. 最近订单列表（不带买家过滤）──
     probes.append({
-        "name": "订单列表_近7天",
+        "name": "订单列表_近7��",
         "url": "https://mms.pinduoduo.com/mangkhut/mms/recentOrderList",
         "method": "POST",
         "body": {
@@ -100,7 +99,7 @@ def build_probes(buyer_id: str) -> list:
     # ── 3. 按买家ID查订单（核心：验证 buyerUid 参数是否有效）──
     if buyer_id:
         probes.append({
-            "name": f"按买家查订单_buyerUid={buyer_id}",
+            "name": "按买家查订单_buyerUid=" + buyer_id,
             "url": "https://mms.pinduoduo.com/mangkhut/mms/recentOrderList",
             "method": "POST",
             "body": {
@@ -117,9 +116,8 @@ def build_probes(buyer_id: str) -> list:
                 "buyerUid": str(buyer_id),
             },
         })
-        # 也试试 buyerId 字段名
         probes.append({
-            "name": f"按买家查订单_buyerId={buyer_id}",
+            "name": "按买家查订单_buyerId=" + buyer_id,
             "url": "https://mms.pinduoduo.com/mangkhut/mms/recentOrderList",
             "method": "POST",
             "body": {
@@ -140,19 +138,19 @@ def build_probes(buyer_id: str) -> list:
     # ── 4. IM 历史消息（含商品/订单卡片的原始消息）──
     if buyer_id:
         probes.append({
-            "name": f"IM历史消息_v1_buyerId={buyer_id}",
+            "name": "IM历史消息_v1_buyerId=" + buyer_id,
             "url": "https://mms.pinduoduo.com/chatbot/im/historyMessage",
             "method": "POST",
             "body": {"buyerId": str(buyer_id), "pageSize": 20},
         })
         probes.append({
-            "name": f"IM历史消息_v2_uid={buyer_id}",
+            "name": "IM历史消息_v2_uid=" + buyer_id,
             "url": "https://mms.pinduoduo.com/chatbot/im/messageList",
             "method": "POST",
             "body": {"uid": str(buyer_id), "pageSize": 20, "pageIndex": 1},
         })
         probes.append({
-            "name": f"IM对话详情_buyerId={buyer_id}",
+            "name": "IM对话详情_buyerId=" + buyer_id,
             "url": "https://mms.pinduoduo.com/chatbot/conversation/detail",
             "method": "POST",
             "body": {"buyerId": str(buyer_id)},
@@ -173,28 +171,27 @@ def build_probes(buyer_id: str) -> list:
         "name": "商品列表_v2",
         "url": "https://mms.pinduoduo.com/mms/item/list",
         "method": "POST",
-        "body": {"page": 1,
-            "pageSize": 5},
+        "body": {"page": 1, "pageSize": 5},
     })
 
     # ── 6. WS token 接口（验证 cookies 有效性）──
     probes.append({
         "name": "获取IM_token",
         "url": "https://mms.pinduoduo.com/chats/getToken",
-        "method": "POST_FORM",  # 特殊：Content-Type: application/x-www-form-urlencoded
+        "method": "POST_FORM",
         "body": {"version": "3"},
     })
 
     # ── 7. 买家信息查询 ──
     if buyer_id:
         probes.append({
-            "name": f"买家信息_uid={buyer_id}",
+            "name": "买家信息_uid=" + buyer_id,
             "url": "https://mms.pinduoduo.com/chatbot/user/info",
             "method": "POST",
             "body": {"uid": str(buyer_id)},
         })
         probes.append({
-            "name": f"买家订单_专用接口_uid={buyer_id}",
+            "name": "买家订单_专用接口_uid=" + buyer_id,
             "url": "https://mms.pinduoduo.com/mangkhut/mms/buyerOrderList",
             "method": "POST",
             "body": {
@@ -204,7 +201,7 @@ def build_probes(buyer_id: str) -> list:
             },
         })
         probes.append({
-            "name": f"买家订单_v2_uid={buyer_id}",
+            "name": "买家订单_v2_uid=" + buyer_id,
             "url": "https://mms.pinduoduo.com/mms/order/buyerOrderList",
             "method": "POST",
             "body": {
@@ -217,13 +214,13 @@ def build_probes(buyer_id: str) -> list:
     # ── 8. 智能客服 / 会话浏览足迹 ──
     if buyer_id:
         probes.append({
-            "name": f"会话上下文_足迹_uid={buyer_id}",
+            "name": "会话上下文_足迹_uid=" + buyer_id,
             "url": "https://mms.pinduoduo.com/chatbot/cs/context",
             "method": "POST",
             "body": {"buyerId": str(buyer_id)},
         })
         probes.append({
-            "name": f"买家浏览商品_uid={buyer_id}",
+            "name": "买家浏览商品_uid=" + buyer_id,
             "url": "https://mms.pinduoduo.com/chatbot/im/recentGoods",
             "method": "POST",
             "body": {"buyerId": str(buyer_id)},
@@ -235,13 +232,12 @@ def build_probes(buyer_id: str) -> list:
 async def load_cookies() -> dict:
     """加载 cookies：优先用手动填写的，其次从文件读"""
     if MANUAL_COOKIES:
-        print(f"[cookies] 使用手动填写的 cookies（{len(MANUAL_COOKIES)} 个）")
+        print("[cookies] 使用手动填写的 cookies（" + str(len(MANUAL_COOKIES)) + " 个）")
         return MANUAL_COOKIES
 
-    # 自动扫描 browser_data 目录
     base = Path(BROWSER_DATA_DIR)
     if not base.exists():
-        print(f"[ERROR] 浏览器数据目录不存在: {base}")
+        print("[ERROR] 浏览器数据目录不存在: " + str(base))
         print("  请先运行主程序完成登录，或手动填写脚本顶部的 MANUAL_COOKIES")
         return {}
 
@@ -254,29 +250,28 @@ async def load_cookies() -> dict:
             candidates.append((shop_dir.name, cfile))
 
     if not candidates:
-        print(f"[ERROR] 在 {base} 下没找到任何 aikefu_cookies.json")
+        print("[ERROR] 在 " + str(base) + " 下没找到任何 aikefu_cookies.json")
         print("  请先运行主程序完成登录，或手动填写脚本顶部的 MANUAL_COOKIES")
         return {}
 
-    # 根据 SHOP_ID 选择
     chosen = None
     if SHOP_ID:
         for name, cfile in candidates:
             if SHOP_ID in name:
                 chosen = cfile
-                print(f"[cookies] 使用店铺 {name} 的 cookies: {cfile}")
+                print("[cookies] 使用店铺 " + name + " 的 cookies: " + str(cfile))
                 break
     if not chosen:
         chosen = candidates[0][1]
-        print(f"[cookies] 自动选择第一个: {candidates[0][0]} -> {chosen}")
+        print("[cookies] 自动选择第一个: " + candidates[0][0] + " -> " + str(chosen))
 
     try:
         with open(chosen, encoding="utf-8") as f:
             data = json.load(f)
-        print(f"[cookies] 加载成功，共 {len(data)} 个 cookie")
+        print("[cookies] 加载成功，共 " + str(len(data)) + " 个 cookie")
         return data
     except Exception as e:
-        print(f"[ERROR] 读取 cookies 文件失败: {e}")
+        print("[ERROR] 读取 cookies 文件失败: " + str(e))
         return {}
 
 
@@ -287,7 +282,7 @@ async def probe_one(session: aiohttp.ClientSession, probe: dict, cookies: dict) 
     method = probe["method"]
     body = probe["body"]
 
-    cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
+    cookie_str = "; ".join(k + "=" + v for k, v in cookies.items())
     headers = dict(HEADERS_BASE)
     headers["Cookie"] = cookie_str
 
@@ -322,42 +317,42 @@ async def probe_one(session: aiohttp.ClientSession, probe: dict, cookies: dict) 
             result["status"] = resp.status
             result["final_url"] = str(resp.url)
             text = await resp.text(errors="replace")
-            result["response_text"] = text[:8000]  # 截断避免文件过大
+            result["response_text"] = text[:8000]
 
-            # 尝试解析 JSON
             try:
                 jdata = json.loads(text)
                 result["response_json"] = jdata
 
-                # 生成摘要
                 success = jdata.get("success") or jdata.get("result") is not None
                 err_msg = jdata.get("error_msg") or jdata.get("errorMsg") or jdata.get("error") or ""
                 result_data = jdata.get("result") or jdata.get("data") or {}
 
                 if success and not err_msg:
                     result["has_data"] = True
-                    # 尝试计算数据条数
                     if isinstance(result_data, list):
-                        result["summary"] = f"✅ 成功，list={len(result_data)}条"
+                        result["summary"] = "OK 成功，list=" + str(len(result_data)) + "条"
                     elif isinstance(result_data, dict):
-                        order_list = result_data.get("orderList") or result_data.get("list") or result_data.get("orders") or []
+                        order_list = (result_data.get("orderList") or
+                                      result_data.get("list") or
+                                      result_data.get("orders") or [])
                         if order_list:
-                            result["summary"] = f"✅ 成功，订单={len(order_list)}条"
+                            result["summary"] = "OK 成功，订单=" + str(len(order_list)) + "条"
                         else:
-                            result["summary"] = f"✅ 成功，result keys={list(result_data.keys())[:8}]"
+                            keys_preview = str(list(result_data.keys())[:8])
+                            result["summary"] = "OK 成功，result keys=" + keys_preview
                     else:
-                        result["summary"] = f"✅ 成功"
+                        result["summary"] = "OK 成功"
                 else:
-                    result["summary"] = f"❌ 失败 error={err_msg or '(无error_msg)'}"
+                    result["summary"] = "FAIL 失败 error=" + str(err_msg or "(无error_msg)")
             except Exception:
-                result["summary"] = f"⚠️ 非JSON响应，status={resp.status}"
+                result["summary"] = "WARN 非JSON响应，status=" + str(resp.status)
 
     except asyncio.TimeoutError:
         result["error"] = "超时"
-        result["summary"] = "⏰ 超时"
+        result["summary"] = "TIMEOUT 超时"
     except Exception as e:
         result["error"] = str(e)
-        result["summary"] = f"💥 异常: {e}"
+        result["summary"] = "ERROR 异常: " + str(e)
 
     return result
 
@@ -367,66 +362,61 @@ async def main():
     print("  拼多多 HTTP API 探测工具")
     print("=" * 60)
 
-    # 1. 加载 cookies
     cookies = await load_cookies()
     if not cookies:
         sys.exit(1)
 
-    # 2. 读取 TEST_BUYER_ID（可从命令行传入）
     buyer_id = TEST_BUYER_ID
     if len(sys.argv) > 1:
         buyer_id = sys.argv[1]
-        print(f"[buyer_id] 命令行传入: {buyer_id}")
+        print("[buyer_id] 命令行传入: " + buyer_id)
     elif buyer_id:
-        print(f"[buyer_id] 使用脚本顶部填写的: {buyer_id}")
+        print("[buyer_id] 使用脚本顶部填写的: " + buyer_id)
     else:
         print("[buyer_id] 未填写 TEST_BUYER_ID，跳过按买家查询的接口")
         print("  提示：运行 python tools/pdd_api_probe.py <buyer_id> 可传入买家ID")
 
-    # 3. 构建探测列表
     probes = build_probes(buyer_id)
-    print(f"\n共探测 {len(probes)} 个接口\n")
+    print("\n共探测 " + str(len(probes)) + " 个接口\n")
 
-    # 4. 逐一探测
     results = []
     async with aiohttp.ClientSession() as session:
         for i, probe in enumerate(probes, 1):
-            print(f"[{i:02d}/{len(probes)}] {probe['name']} ...", end=" ", flush=True)
+            label = "[" + str(i).zfill(2) + "/" + str(len(probes)) + "] " + probe["name"] + " ..."
+            print(label, end=" ", flush=True)
             r = await probe_one(session, probe, cookies)
             print(r["summary"])
             results.append(r)
-            await asyncio.sleep(0.3)  # 避免太快
+            await asyncio.sleep(0.3)
 
-    # 5. 保存结果
     output = {
         "probe_time": time.strftime("%Y-%m-%d %H:%M:%S"),
         "buyer_id_used": buyer_id,
         "cookies_count": len(cookies),
-        "cookies_keys": list(cookies.keys()),  # 只记录 key，不记录 value（安全）
+        "cookies_keys": list(cookies.keys()),
         "results": results,
     }
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
-    print(f"\n✅ 结果已保存到: {OUTPUT_FILE}")
+    print("\nOK 结果已保存到: " + OUTPUT_FILE)
 
-    # 6. 打印成功的接口汇总
     print("\n" + "=" * 60)
     print("  成功接口汇总（has_data=True）：")
     print("=" * 60)
     ok_count = 0
     for r in results:
         if r["has_data"]:
-            print(f"  ✅ {r['name']}")
+            print("  OK " + r["name"])
             ok_count += 1
     if ok_count == 0:
-        print("  ⚠️  没有任何接口返回有效数据！")
+        print("  WARN 没有任何接口返回有效数据！")
         print("  可能原因：")
         print("    1. cookies 已过期，请重新登录")
         print("    2. 网络问题")
         print("    3. 需要先填写 TEST_BUYER_ID 才能验证按买家查询的接口")
 
-    print(f"\n请将 probe_result.json 发给 Copilot 以便根据真实数据结构修复代码。")
+    print("\n请将 probe_result.json 发给 Copilot 以便根据真实数据结构修复代码。")
     print("注意：probe_result.json 不含 cookies 值，只含 key 名，安全可以分享。")
 
 
