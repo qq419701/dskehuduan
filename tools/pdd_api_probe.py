@@ -122,43 +122,62 @@ def build_probes(buyer_id: str) -> list:
         },
     })
 
-    # ── 3. 按买家ID查订单 ──
+    # ── 3. 按买家ID查订单（多参数变体） ──
     if buyer_id:
+        for param_name in ("buyerUserId", "buyerUid", "buyerId", "uid"):
+            probes.append({
+                "name": "按买家查订单_{}={}".format(param_name, buyer_id),
+                "url": "https://mms.pinduoduo.com/mangkhut/mms/recentOrderList",
+                "method": "POST",
+                "body": {
+                    "orderType": 0,
+                    "afterSaleType": 0,
+                    "remarkStatus": -1,
+                    "urgeShippingStatus": -1,
+                    "groupStartTime": now - 90 * 86400,
+                    "groupEndTime": now,
+                    "pageNumber": 1,
+                    "pageSize": 10,
+                    "hideRegionBlackDelayShipping": False,
+                    "mobileMarkSearch": False,
+                    param_name: str(buyer_id),
+                },
+            })
+
+    # ── 3b. 订单接口多路径备选 ──
+    if buyer_id:
+        # /mangkhut/mms/order/list
+        for param_name in ("buyerUserId", "buyerUid", "buyerId"):
+            probes.append({
+                "name": "订单接口_order/list_{}_{}".format(param_name, buyer_id),
+                "url": "https://mms.pinduoduo.com/mangkhut/mms/order/list",
+                "method": "POST",
+                "body": {
+                    "pageNumber": 1,
+                    "pageSize": 10,
+                    param_name: str(buyer_id),
+                },
+            })
+        # /proxy/im/customerService/recentOrderList with buyerUserId
         probes.append({
-            "name": "按买家查订单_buyerUid=" + buyer_id,
-            "url": "https://mms.pinduoduo.com/mangkhut/mms/recentOrderList",
+            "name": "客服订单_recentOrderList_buyerUserId=" + buyer_id,
+            "url": "https://mms.pinduoduo.com/proxy/im/customerService/recentOrderList",
             "method": "POST",
-            "body": {
-                "orderType": 0,
-                "afterSaleType": 0,
-                "remarkStatus": -1,
-                "urgeShippingStatus": -1,
-                "groupStartTime": now - 90 * 86400,
-                "groupEndTime": now,
-                "pageNumber": 1,
-                "pageSize": 10,
-                "hideRegionBlackDelayShipping": False,
-                "mobileMarkSearch": False,
-                "buyerUid": str(buyer_id),
-            },
+            "body": {"buyerUserId": str(buyer_id), "pageNumber": 1, "pageSize": 10},
         })
+        # /proxy/mangkhut/mms/order/queryByBuyer
         probes.append({
-            "name": "按买家查订单_buyerId=" + buyer_id,
-            "url": "https://mms.pinduoduo.com/mangkhut/mms/recentOrderList",
+            "name": "订单查询_queryByBuyer_uid=" + buyer_id,
+            "url": "https://mms.pinduoduo.com/proxy/mangkhut/mms/order/queryByBuyer",
             "method": "POST",
-            "body": {
-                "orderType": 0,
-                "afterSaleType": 0,
-                "remarkStatus": -1,
-                "urgeShippingStatus": -1,
-                "groupStartTime": now - 90 * 86400,
-                "groupEndTime": now,
-                "pageNumber": 1,
-                "pageSize": 10,
-                "hideRegionBlackDelayShipping": False,
-                "mobileMarkSearch": False,
-                "buyerId": str(buyer_id),
-            },
+            "body": {"buyerUserId": str(buyer_id), "pageNumber": 1, "pageSize": 10},
+        })
+        # /proxy/mangkhut/mms/customer/recentOrder
+        probes.append({
+            "name": "客户最近订单_recentOrder_uid=" + buyer_id,
+            "url": "https://mms.pinduoduo.com/proxy/mangkhut/mms/customer/recentOrder",
+            "method": "POST",
+            "body": {"buyerUserId": str(buyer_id), "pageNumber": 1, "pageSize": 10},
         })
 
     # ── 4. IM 历史消息 ──
@@ -239,6 +258,19 @@ def build_probes(buyer_id: str) -> list:
             "method": "POST",
             "body": {"uid": str(buyer_id), "pageSize": 10},
         })
+        # 浏览足迹接口备选
+        probes.append({
+            "name": "浏览足迹_browse/history_uid=" + buyer_id,
+            "url": "https://mms.pinduoduo.com/proxy/mangkhut/mms/goods/browse/history",
+            "method": "POST",
+            "body": {"buyerUserId": str(buyer_id), "pageSize": 10},
+        })
+        probes.append({
+            "name": "客服浏览商品_userBrowseGoods_uid=" + buyer_id,
+            "url": "https://mms.pinduoduo.com/proxy/im/customerService/userBrowseGoods",
+            "method": "POST",
+            "body": {"buyerUserId": str(buyer_id), "pageSize": 10},
+        })
 
     return probes
 
@@ -284,7 +316,32 @@ def probe_one(sess: requests.Session, probe: dict, anti_content: str) -> dict:
 
             success = jdata.get("success") or jdata.get("result") is not None
             err_msg = jdata.get("error_msg") or jdata.get("errorMsg") or jdata.get("error") or ""
-            result_data = jdata.get("result") or jdata.get("data") or {} 
+            result_data = jdata.get("result") or jdata.get("data") or {}
+
+            # 自动识别数据路径
+            detected_path = None
+            result_val = jdata.get("result")
+            data_val = jdata.get("data")
+            result_dict = result_val if isinstance(result_val, dict) else {}
+            data_dict = data_val if isinstance(data_val, dict) else {}
+            _data_paths = [
+                ("result.list", result_dict, "list"),
+                ("result.orderList", result_dict, "orderList"),
+                ("data.orderList", data_dict, "orderList"),
+                ("data.list", data_dict, "list"),
+            ]
+            for path_name, parent, key in _data_paths:
+                val = parent.get(key)
+                if isinstance(val, list) and val:
+                    detected_path = path_name
+                    break
+            if detected_path is None:
+                if isinstance(result_val, list) and result_val:
+                    detected_path = "result"
+                elif isinstance(data_val, list) and data_val:
+                    detected_path = "data"
+            if detected_path:
+                result["_detected_data_path"] = detected_path
 
             if err_msg and ("过期" in str(err_msg) or "登录" in str(err_msg) or "session" in str(err_msg).lower()):
                 result["error"] = err_msg
