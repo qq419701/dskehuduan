@@ -6,6 +6,8 @@ logger = logging.getLogger(__name__)
 
 ORDER_API_URL = 'https://mms.pinduoduo.com/mangkhut/mms/recentOrderList'
 ORDER_SYNC_INTERVAL = 300
+# 遭遇限流后的等待秒数
+ORDER_RATE_LIMIT_RETRY_WAIT = 60
 
 ORDER_STATUS_MAP = {
     0: '待付款', 1: '待发货', 2: '已发货', 3: '已完成',
@@ -21,6 +23,8 @@ class PddOrderCollector:
         # 店铺Token（同步到服务端时使用）
         self.shop_token = shop_token
         self._running = False
+        # 限流标记：fetch_orders检测到限流时置True，由sync_orders消费后重置
+        self._rate_limited = False
 
     def _build_headers(self, cookies):
         cookie_str = '; '.join(f'{k}={v}' for k, v in cookies.items())
@@ -66,7 +70,11 @@ class PddOrderCollector:
                     data = await resp.json(content_type=None)
 
             if not data.get('success'):
-                logger.warning('获取订单失败: %s', data.get('error_msg') or data.get('errorMsg'))
+                err_msg = data.get('error_msg') or data.get('errorMsg') or ''
+                logger.warning('获取订单失败: %s', err_msg)
+                # 检测限流错误，设置标记供上层重试
+                if '频繁' in err_msg or '稍后' in err_msg:
+                    self._rate_limited = True
                 return []
 
             result = data.get('result') or data.get('data') or {}
@@ -145,7 +153,16 @@ class PddOrderCollector:
         while True:
             orders = await self.fetch_orders(cookies, page=page, page_size=20, days=days)
             if not orders:
-                break
+                if self._rate_limited:
+                    # 遇到限流，等待后重试一次
+                    self._rate_limited = False
+                    logger.warning('店铺 %s 遭遇限流，等待%d秒后重试...', self.shop_id, ORDER_RATE_LIMIT_RETRY_WAIT)
+                    await asyncio.sleep(ORDER_RATE_LIMIT_RETRY_WAIT)
+                    orders = await self.fetch_orders(cookies, page=page, page_size=20, days=days)
+                    if not orders:
+                        break
+                else:
+                    break
             for o in orders:
                 if self.db_client:
                     self.db_client.insert_order(self.shop_id, o)

@@ -4,6 +4,7 @@
 采集店铺商品数据，用于同步到 aikefu 知识库
 """
 import asyncio
+import json
 import logging
 
 import aiohttp
@@ -67,7 +68,16 @@ class PddProductCollector:
                 ) as resp:
                     if resp.status != 200:
                         return []
-                    data = await resp.json()
+                    # 检测拼多多未登录/session过期时的重定向（HTTP 200但跳到404页）
+                    final_url = str(resp.url)
+                    if '/other/404' in final_url or '__from=' in final_url:
+                        logger.warning('商品接口被重定向（可能未登录/session过期）: %s', final_url)
+                        return []
+                    try:
+                        data = await resp.json(content_type=None)
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error('商品接口响应解析失败: %s', e)
+                        return []
 
             if not data.get("success"):
                 return []
