@@ -12,7 +12,8 @@ import threading
 import time
 
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer
-from PyQt6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon, QMenu
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QApplication, QMessageBox, QStyle, QSystemTrayIcon, QMenu
 
 try:
     from qfluentwidgets import (
@@ -160,10 +161,10 @@ class MainWindow(FluentWindow):
         self._sync_timer.start()
         # 启动时延迟10秒执行一次，等待UI完全初始化
         QTimer.singleShot(10_000, self._sync_deleted_shops)
-        # 启动时延迟20秒，为每个店铺同步近7天订单到服务端
-        QTimer.singleShot(20_000, self._sync_orders_to_server)
-        # 启动时延迟30秒，为每个店铺同步商品列表到服务端
-        QTimer.singleShot(30_000, self._sync_goods_to_server)
+        # 启动时延迟5分钟，为每个店铺同步近7天订单到服务端（让 IM channel 先稳定）
+        QTimer.singleShot(5 * 60 * 1000, self._sync_orders_to_server)
+        # 启动时延迟6分钟，为每个店铺同步商品列表到服务端
+        QTimer.singleShot(6 * 60 * 1000, self._sync_goods_to_server)
 
     def _check_login(self):
         """检查登录状态，未登录则弹出登录弹窗"""
@@ -265,6 +266,16 @@ class MainWindow(FluentWindow):
         quit_action.triggered.connect(QApplication.quit)
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.activated.connect(self._on_tray_activated)
+        # 设置托盘图标，优先使用资源文件，回退到系统内置图标
+        resources_dir = os.path.join(os.path.dirname(__file__), '..', 'resources')
+        icon_path = os.path.join(resources_dir, 'icon.ico')
+        if not os.path.exists(icon_path):
+            icon_path = os.path.join(resources_dir, 'icon.png')
+        if os.path.exists(icon_path):
+            app_icon = QIcon(icon_path)
+        else:
+            app_icon = QApplication.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        self.tray_icon.setIcon(app_icon)
         self.tray_icon.show()
 
     def _on_tray_activated(self, reason):
@@ -482,6 +493,8 @@ class MainWindow(FluentWindow):
                     logger.info('店铺 %s 近7天订单同步完成', shop_id)
                 except Exception as e:
                     logger.error('店铺 %s 同步订单失败: %s', shop_id, e)
+                # 多店铺间隔3秒，避免连续请求触发限流
+                time.sleep(3)
 
         threading.Thread(target=_do_sync, daemon=True).start()
 
@@ -519,6 +532,8 @@ class MainWindow(FluentWindow):
                     logger.info('店铺 %s 商品同步完成', shop_id)
                 except Exception as e:
                     logger.error('店铺 %s 同步商品失败: %s', shop_id, e)
+                # 多店铺间隔3秒，避免连续请求触发限流
+                time.sleep(3)
 
         threading.Thread(target=_do_sync, daemon=True).start()
 
