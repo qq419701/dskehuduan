@@ -87,7 +87,25 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
     if not order_id:
         order_id = str(biz.get('order_sn') or biz.get('orderSn') or biz.get('order_id') or '')
 
-    if not buyer_id and not content:
+    # 从biz上下文提取浏览足迹（买家进入会话时携带的商品信息）
+    source_goods = None
+    biz_goods_id = str(biz.get('goods_id') or biz.get('goodsId') or biz.get('sourceGoodsId') or '')
+    biz_goods_name = str(biz.get('goods_name') or biz.get('goodsName') or biz.get('sourceGoodsName') or '')
+    biz_goods_img = str(biz.get('goods_img') or biz.get('goodsImg') or biz.get('sourceGoodsImg') or biz.get('goodsImageUrl') or '')
+    biz_goods_price = biz.get('goods_price') or biz.get('goodsPrice') or biz.get('minGroupPrice') or 0
+    if biz_goods_id or biz_goods_name:
+        source_goods = {
+            'goods_id': biz_goods_id,
+            'goods_name': biz_goods_name,
+            'goods_img': biz_goods_img,
+            'goods_price': biz_goods_price,
+        }
+
+    # msg_category=4/5 是"买家进入会话"通知，不含用户文字但含商品上下文
+    # 这类消息在 content 为空时也应该传递浏览足迹
+    is_enter_session = int(msg_category) in (4, 5) or msg_type == 'system'
+
+    if not buyer_id and not content and not is_enter_session:
         return None
 
     return {
@@ -99,6 +117,8 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
         'image_url': image_url,
         'order_id': order_id,
         'order_info': order_info,
+        'source_goods': source_goods,
+        'is_enter_session': is_enter_session,
         'timestamp': int(timestamp) if timestamp else 0,
     }
 
@@ -192,5 +212,7 @@ def _parse_old_format(body: dict) -> Optional[dict]:
         'image_url': image_url,
         'order_id': order_id,
         'order_info': order_info,
+        'source_goods': None,
+        'is_enter_session': False,
         'timestamp': int(timestamp) if timestamp else 0,
     }
