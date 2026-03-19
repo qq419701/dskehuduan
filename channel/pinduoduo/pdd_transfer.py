@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # pdd_transfer.py - 纯 HTTP API 版本，不启动任何浏览器
 # 直接用 cookies 调用拼多多接口转移会话
 import logging
@@ -45,8 +45,11 @@ class PddTransferHuman:
                 "Content-Type": "application/json",
                 "X-Anti-Content": anti,
             })
+            # ★ 修复：同时绑定到 mms.pinduoduo.com 和 .pinduoduo.com 两个域
+            # requests 对子域名 cookie 匹配规则与浏览器不同，必须双绑才能覆盖所有拼多多接口
             for k, v in self.cookies.items():
-                self._session.cookies.set(k, v, domain=".pinduoduo.com")
+                self._session.cookies.set(k, v, domain="mms.pinduoduo.com", path="/")
+                self._session.cookies.set(k, v, domain=".pinduoduo.com", path="/")
             logger.info("[transfer] Session 初始化完成，注入 cookies: %d 个，key列表=%s，anti_content=%s",
                         len(self.cookies), list(self.cookies.keys())[:10],
                         "已配置" if anti else "未配置（风控风险）")
@@ -393,7 +396,7 @@ class PddTransferHuman:
                     except (ValueError, KeyError):
                         return True
             except Exception as e:
-                logger.warning("转移���口失败 %s: %s", url, e)
+                logger.warning("转移接口失败 %s: %s", url, e)
 
         return False
 
@@ -448,4 +451,3 @@ class PddTransferHuman:
             except Exception:
                 pass
             self._session = None
-
