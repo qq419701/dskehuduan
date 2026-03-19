@@ -35,11 +35,16 @@ class ServerAPI:
         order_sn: str = "",
         msg_type: str = "text",
         image_url: str = "",
+        current_goods: dict = None,
+        order_info: dict = None,
     ) -> dict:
         """
         推送买家消息到aikefu服务器，获取AI回复
         POST /api/webhook/message
         返回：{"success": true, "reply": "...", "needs_human": false, "process_by": "rule"}
+        新增参数：
+          current_goods - 买家当前浏览的商品信息（含 goods_id、goods_name、goods_img）
+          order_info    - 买家最近订单的完整信息对象
         """
         payload = {
             "shop_id": shop_id,
@@ -51,6 +56,12 @@ class ServerAPI:
             "msg_type": msg_type,
             "image_url": image_url or "",
         }
+        # 有浏览足迹时才加入，避免兼容性问题
+        if current_goods:
+            payload["current_goods"] = current_goods
+        # 有完整订单信息时才加入
+        if order_info:
+            payload["order_info"] = order_info
         try:
             resp = self.session.post(
                 f"{self.base_url}/api/webhook/message",
@@ -73,10 +84,13 @@ class ServerAPI:
         order_sn: str = "",
         msg_type: str = "text",
         order_info: dict = None,
+        current_goods: dict = None,
     ) -> dict:
         """
-        通过shop_token推送买家消息（插件接口）
+        通过shop_token推送买家消息（客户端/插件通用接口）
         POST /api/webhook/pdd
+        新增参数：
+          current_goods - 买家当前浏览的商品信息（含 goods_id、goods_name、goods_img）
         """
         payload = {
             "shop_token": shop_token,
@@ -88,6 +102,9 @@ class ServerAPI:
             "order_sn": order_sn or order_id or "",
             "order_info": order_info or {},
         }
+        # 有浏览足迹时才加入，避免兼容性问题
+        if current_goods:
+            payload["current_goods"] = current_goods
         try:
             resp = self.session.post(
                 f"{self.base_url}/api/webhook/pdd",
@@ -369,4 +386,46 @@ class ServerAPI:
             return resp.json()
         except requests.RequestException as e:
             logger.error("发送AI回复给买家失败: %s", e)
+            return {"success": False, "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # 客户端数据同步接口（V4 新增）
+    # ------------------------------------------------------------------
+
+    def sync_orders_to_server(self, shop_token: str, orders: list) -> dict:
+        """
+        批量同步近7天订单到服务端
+        POST /api/client/sync-orders
+        请求体：{"shop_token": "xxx", "orders": [...]}
+        返回：{"success": true, "upserted": N}
+        """
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/api/client/sync-orders",
+                json={"shop_token": shop_token, "orders": orders},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            logger.error("同步订单到服务端失败: %s", e)
+            return {"success": False, "error": str(e)}
+
+    def sync_goods_to_server(self, shop_token: str, goods_list: list) -> dict:
+        """
+        批量同步商品列表到服务端
+        POST /api/client/sync-goods
+        请求体：{"shop_token": "xxx", "goods_list": [...]}
+        返回：{"success": true, "upserted": N}
+        """
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/api/client/sync-goods",
+                json={"shop_token": shop_token, "goods_list": goods_list},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            logger.error("同步商品到服务端失败: %s", e)
             return {"success": False, "error": str(e)}
