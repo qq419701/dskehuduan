@@ -24,6 +24,31 @@ def parse_message(data: dict) -> Optional[dict]:
     return None
 
 
+def _extract_source_goods_from_biz(biz: dict) -> Optional[dict]:
+    """从 biz 上下文提取浏览商品信息，支持扁平字段和 sourceGoods 对象两种格式"""
+    goods_id = str(biz.get('goods_id') or biz.get('goodsId') or biz.get('sourceGoodsId') or '')
+    goods_name = str(biz.get('goods_name') or biz.get('goodsName') or biz.get('sourceGoodsName') or '')
+    goods_img = str(biz.get('goods_img') or biz.get('goodsImg') or biz.get('sourceGoodsImg') or biz.get('goodsImageUrl') or '')
+    goods_price = biz.get('goods_price') or biz.get('goodsPrice') or biz.get('minGroupPrice') or 0
+
+    # 补充：sourceGoods 是对象时展开
+    source_obj = biz.get('sourceGoods') or biz.get('source_goods') or {}
+    if isinstance(source_obj, dict) and source_obj:
+        goods_id = goods_id or str(source_obj.get('goodsId') or source_obj.get('goods_id') or '')
+        goods_name = goods_name or str(source_obj.get('goodsName') or source_obj.get('goods_name') or '')
+        goods_img = goods_img or str(source_obj.get('goodsImg') or source_obj.get('thumbUrl') or '')
+        goods_price = goods_price or source_obj.get('minGroupPrice') or source_obj.get('price') or 0
+
+    if goods_id or goods_name:
+        return {
+            'goods_id': goods_id,
+            'goods_name': goods_name,
+            'goods_img': goods_img,
+            'goods_price': goods_price,
+        }
+    return None
+
+
 def _parse_new_format(msg: dict) -> Optional[dict]:
     from_info = msg.get('from') or {}
     role = from_info.get('role', '')
@@ -88,18 +113,7 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
         order_id = str(biz.get('order_sn') or biz.get('orderSn') or biz.get('order_id') or '')
 
     # 从biz上下文提取浏览足迹（买家进入会话时携带的商品信息）
-    source_goods = None
-    biz_goods_id = str(biz.get('goods_id') or biz.get('goodsId') or biz.get('sourceGoodsId') or '')
-    biz_goods_name = str(biz.get('goods_name') or biz.get('goodsName') or biz.get('sourceGoodsName') or '')
-    biz_goods_img = str(biz.get('goods_img') or biz.get('goodsImg') or biz.get('sourceGoodsImg') or biz.get('goodsImageUrl') or '')
-    biz_goods_price = biz.get('goods_price') or biz.get('goodsPrice') or biz.get('minGroupPrice') or 0
-    if biz_goods_id or biz_goods_name:
-        source_goods = {
-            'goods_id': biz_goods_id,
-            'goods_name': biz_goods_name,
-            'goods_img': biz_goods_img,
-            'goods_price': biz_goods_price,
-        }
+    source_goods = _extract_source_goods_from_biz(biz)
 
     # msg_category=4/5 是"买家进入会话"通知，不含用户文字但含商品上下文
     # 这类消息在 content 为空时也应该传递浏览足迹
@@ -200,6 +214,10 @@ def _parse_old_format(body: dict) -> Optional[dict]:
     elif msg_type == 'withdraw':
         content = '[消息已撤回]'
 
+    # 从biz上下文提取浏览足迹（旧格式消息）
+    biz_old = body.get('push_biz_context') or body.get('bizContext') or {}
+    source_goods = _extract_source_goods_from_biz(biz_old)
+
     if not buyer_id and not content:
         return None
 
@@ -212,7 +230,7 @@ def _parse_old_format(body: dict) -> Optional[dict]:
         'image_url': image_url,
         'order_id': order_id,
         'order_info': order_info,
-        'source_goods': None,
+        'source_goods': source_goods,
         'is_enter_session': False,
         'timestamp': int(timestamp) if timestamp else 0,
     }
