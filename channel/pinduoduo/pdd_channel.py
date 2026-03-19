@@ -173,8 +173,11 @@ class PddChannel(BaseChannel):
         # ── 步骤1：用消息内容更新买家上下文缓存（订单卡片、商品卡片、浏览足迹）──
         self._ctx_manager.update_from_message(str(self.shop_id), str(buyer_id), msg)
 
-        # ── 步骤2：触发异步HTTP采集该买家的订单（非阻塞，冷却期内不重复）──
+        # ── 步骤2：触发异步HTTP采集该买家的订单 ──
+        # 若是该买家首条消息且上下文为空，先等待一次立即同步采集（最多3秒），再读上下文
         if buyer_id:
+            existing_ctx = self._ctx_manager.get_context(str(self.shop_id), str(buyer_id))
+            await self._ctx_fetcher.fetch_once_if_needed(str(buyer_id), existing_ctx)
             self._ctx_fetcher.request_fetch(buyer_id)
 
         # ── 步骤3：从上下文管理器获取最新上下文（合并订单+浏览足迹）──

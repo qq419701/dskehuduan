@@ -153,6 +153,41 @@ class PddContextFetcher:
     def stop(self):
         self._running = False
 
+    async def fetch_once_if_needed(self, buyer_id: str, current_ctx: dict):
+        """
+        若该买家从未通过HTTP采集过订单，且当前上下文中无订单信息，
+        则立即执行一次采集（最多等3秒），确保AI首条回复能带上订单信息。
+        """
+        buyer_id = str(buyer_id)
+        # 已有订单上下文，不需要重复采集
+        if current_ctx.get('order_sn') or current_ctx.get('order_info'):
+            return
+        # 已在冷却期内，不重复
+        now = time.time()
+        if now - self._last_query.get(buyer_id, 0) < self._query_cooldown:
+            return
+        # 正在查询中，等待最多3秒
+        if buyer_id in self._querying:
+            for _ in range(30):
+                await asyncio.sleep(0.1)
+                if buyer_id not in self._querying:
+                    break
+            return
+        # 立即执行一次采集
+        self._querying.add(buyer_id)
+        try:
+            orders = await self.fetch_buyer_orders(buyer_id)
+            if orders:
+                self.context_manager.update_from_http_orders(
+                    self.shop_id, buyer_id, orders
+                )
+            self._last_query[buyer_id] = time.time()
+            logger.info('[ctx_fetcher] 买家 %s 首次消息，立即采集订单完成', buyer_id)
+        except Exception as e:
+            logger.debug('[ctx_fetcher] 买家 %s 立即采集异常: %s', buyer_id, e)
+        finally:
+            self._querying.discard(buyer_id)
+
     def update_cookies(self, cookies: dict):
         """更新 cookies（店铺重新登录后调用）"""
         self.cookies = cookies

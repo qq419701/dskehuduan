@@ -77,19 +77,29 @@ class BuyerContextManager:
                 ctx.order_info = order_info
                 logger.info('买家 %s 订单上下文已更新（订单卡片）: %s', buyer_id, order_sn)
 
-        # 2. 商品卡片消息 → 更新浏览足迹
+        # 2. 商品卡片消息 → 更新浏览足迹（兼容 order_info 和顶层字段两种格式）
         if msg_type == 'goods':
-            order_info = msg.get('order_info') or {}
-            goods_id = str(order_info.get('goods_id') or order_info.get('goodsId') or '')
-            goods_name = str(order_info.get('goods_name') or order_info.get('goodsName') or '')
-            goods_img = str(order_info.get('goods_img') or order_info.get('goodsImg') or '')
+            order_info_data = msg.get('order_info') or {}
+            # order_info 中的字段（来自 _parse_content_obj）
+            goods_id = str(order_info_data.get('goods_id') or order_info_data.get('goodsId') or '')
+            goods_name = str(order_info_data.get('goods_name') or order_info_data.get('goodsName') or '')
+            goods_img = str(order_info_data.get('goods_img') or order_info_data.get('goodsImg') or '')
+            goods_price = order_info_data.get('price') or 0
+            # 若 order_info 里没有，再从 source_goods 补充
+            sg = msg.get('source_goods') or {}
+            if isinstance(sg, dict):
+                goods_id = goods_id or str(sg.get('goods_id') or sg.get('goodsId') or '')
+                goods_name = goods_name or str(sg.get('goods_name') or sg.get('goodsName') or '')
+                goods_img = goods_img or str(sg.get('goods_img') or sg.get('goodsImg') or '')
+                goods_price = goods_price or sg.get('goods_price') or sg.get('goodsPrice') or 0
             if goods_id or goods_name:
                 ctx.current_goods = {
                     'goods_id': goods_id,
                     'goods_name': goods_name,
                     'goods_img': goods_img,
+                    'goods_price': goods_price,
                 }
-                logger.info('买家 %s 浏览足迹已更新（商品卡片）: %s', buyer_id, goods_name)
+                logger.info('买家 %s 浏览足迹已更新（商品卡片）: %s %s', buyer_id, goods_id, goods_name)
 
         # 3. 消息中携带 source_goods（WS biz 上下文中的浏览商品）
         source_goods = msg.get('source_goods')
