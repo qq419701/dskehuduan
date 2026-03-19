@@ -5,7 +5,9 @@
 导航栏：首页 | 拼多多店铺 | 消息监控 | 🔌 插件状态 | U号租专区 | 📖 帮助文档 | ⚙️ 设置
 """
 import asyncio
+import json
 import logging
+import os
 import threading
 import time
 
@@ -158,6 +160,10 @@ class MainWindow(FluentWindow):
         self._sync_timer.start()
         # 启动时延迟10秒执行一次，等待UI完全初始化
         QTimer.singleShot(10_000, self._sync_deleted_shops)
+        # 启动时延迟20秒，为每个店铺同步近7天订单到服务端
+        QTimer.singleShot(20_000, self._sync_orders_to_server)
+        # 启动时延迟30秒，为每个店铺同步商品列表到服务端
+        QTimer.singleShot(30_000, self._sync_goods_to_server)
 
     def _check_login(self):
         """检查登录状态，未登录则弹出登录弹窗"""
@@ -422,6 +428,99 @@ class MainWindow(FluentWindow):
         cfg.remove_shops_by_ids(deleted_ids)
         self.shop_page.load_shops()
         logger.info("已自动清理已删除店铺: %s", deleted_ids)
+
+    def _load_cookies_for_shop(self, shop: dict) -> dict:
+        """
+        从店铺配置或持久化目录读取 cookies
+        优先使用配置中的 cookies，其次从 ~/.aikefu-client/browser_data/ 读取缓存
+        """
+        shop_id = shop.get('id') or shop.get('shop_id')
+        cookies = shop.get('cookies') or {}
+        if not cookies:
+            # 尝试从持久化目录读取已保存的 cookies
+            browser_base = os.path.join(os.path.expanduser('~'), '.aikefu-client', 'browser_data')
+            cookies_json = os.path.join(browser_base, f'shop_{shop_id}', 'aikefu_cookies.json')
+            if os.path.exists(cookies_json):
+                try:
+                    with open(cookies_json, encoding='utf-8') as f:
+                        cookies = json.load(f)
+                except Exception:
+                    pass
+        return cookies
+
+    def _sync_orders_to_server(self):
+        """
+        后台同步近7天订单到服务端
+        遍历所有激活的店铺，调用 PddOrderCollector.sync_orders 上报到 aikefu 服务端
+        在独立守护线程中运行，不阻塞UI
+        """
+        def _do_sync():
+            active_shops = cfg.get_active_shops()
+            if not active_shops:
+                return
+            for shop in active_shops:
+                shop_id = shop.get('id') or shop.get('shop_id')
+                shop_token = shop.get('shop_token', '')
+                cookies = self._load_cookies_for_shop(shop)
+                if not cookies:
+                    logger.warning('店铺 %s 无 cookies，跳过订单同步', shop_id)
+                    continue
+                try:
+                    from channel.pinduoduo.pdd_order import PddOrderCollector
+                    collector = PddOrderCollector(
+                        shop_id=shop_id,
+                        server_api=self.server_api,
+                        shop_token=shop_token,
+                    )
+                    # 在新的事件循环中运行异步任务，避免与已有事件循环冲突
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(collector.sync_orders(cookies, days=7))
+                    finally:
+                        loop.close()
+                    logger.info('店铺 %s 近7天订单同步完成', shop_id)
+                except Exception as e:
+                    logger.error('店铺 %s 同步订单失败: %s', shop_id, e)
+
+        threading.Thread(target=_do_sync, daemon=True).start()
+
+    def _sync_goods_to_server(self):
+        """
+        后台同步商品列表到服务端
+        遍历所有激活的店铺，调用 PddProductCollector.sync_products 上报到 aikefu 服务端
+        在独立守护线程中运行，不阻塞UI
+        """
+        def _do_sync():
+            active_shops = cfg.get_active_shops()
+            if not active_shops:
+                return
+            for shop in active_shops:
+                shop_id = shop.get('id') or shop.get('shop_id')
+                shop_token = shop.get('shop_token', '')
+                cookies = self._load_cookies_for_shop(shop)
+                if not cookies:
+                    logger.warning('店铺 %s 无 cookies，跳过商品同步', shop_id)
+                    continue
+                try:
+                    from channel.pinduoduo.pdd_product import PddProductCollector
+                    collector = PddProductCollector(
+                        shop_id=shop_id,
+                        server_api=self.server_api,
+                        shop_token=shop_token,
+                    )
+                    # 在新的事件循环中运行异步任务，避免与已有事件循环冲突
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(collector.sync_products(cookies))
+                    finally:
+                        loop.close()
+                    logger.info('店铺 %s 商品同步完成', shop_id)
+                except Exception as e:
+                    logger.error('店铺 %s 同步商品失败: %s', shop_id, e)
+
+        threading.Thread(target=_do_sync, daemon=True).start()
 
     def closeEvent(self, event):
         event.ignore()

@@ -13,13 +13,31 @@ logger = logging.getLogger(__name__)
 PDD_GOODS_LIST_URL = "https://mms.pinduoduo.com/mms/api/goods/list"
 
 
+def _safe_float(val, default=0.0) -> float:
+    """安全转换为浮点数，转换失败时返回默认值"""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(val, default=0) -> int:
+    """安全转换为整数，转换失败时返回默认值"""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
 class PddProductCollector:
     """拼多多商品采集器"""
 
-    def __init__(self, shop_id: int, db_client=None, server_api=None):
+    def __init__(self, shop_id: int, db_client=None, server_api=None, shop_token: str = ''):
         self.shop_id = shop_id
         self.db_client = db_client
         self.server_api = server_api
+        # 店铺Token（同步到服务端时使用）
+        self.shop_token = shop_token
 
     async def fetch_products(self, cookies: dict, page: int = 1, page_size: int = 20) -> list:
         """
@@ -63,15 +81,32 @@ class PddProductCollector:
             return []
 
     async def sync_products(self, cookies: dict):
-        """同步商品信息"""
+        """
+        同步商品信息
+        1. 分页拉取所有商品
+        2. 如果配置了 server_api，批量上报到aikefu服务端
+        """
         logger.info("开始同步店铺 %s 的商品信息...", self.shop_id)
         page = 1
         total = 0
+        all_goods = []  # 收集所有商品，用于批量上报
 
         while True:
             products = await self.fetch_products(cookies, page=page)
             if not products:
                 break
+            # 规范化商品字段格式，便于服务端统一处理
+            for item in products:
+                normalized = {
+                    'goods_id': str(item.get('goodsId') or item.get('goods_id') or ''),
+                    'goods_name': str(item.get('goodsName') or item.get('goods_name') or ''),
+                    'goods_img': str(item.get('goodsImageUrl') or item.get('goods_img') or ''),
+                    'price': _safe_float(item.get('minGroupPrice') or item.get('price') or 0) / 100,
+                    'stock': _safe_int(item.get('stockQuantity') or item.get('stock') or 0),
+                    'status': '在售' if item.get('isOnSale') or item.get('status') == 1 else '下架',
+                    'category': str(item.get('catName') or item.get('category') or ''),
+                }
+                all_goods.append(normalized)
             total += len(products)
             if len(products) < 20:
                 break
@@ -79,3 +114,11 @@ class PddProductCollector:
             await asyncio.sleep(1)
 
         logger.info("店铺 %s 商品同步完成，共 %d 件", self.shop_id, total)
+
+        # 批量上报到aikefu服务端（如已配置server_api）
+        if self.server_api and all_goods and self.shop_token:
+            try:
+                result = self.server_api.sync_goods_to_server(self.shop_token, all_goods)
+                logger.info("店铺 %s 商品已上报到服务端，结果: %s", self.shop_id, result)
+            except Exception as e:
+                logger.error("上报商品到服务端失败: %s", e)

@@ -192,12 +192,37 @@ class PddChannel(BaseChannel):
 
         if not self.server_api: return
 
+        # 从消息中提取买家当前浏览的商品信息（浏览足迹）
+        # 优先使用消息自带的 source_goods 字段，其次从 order_info 中组装
+        current_goods = None
+        source_goods = msg.get('source_goods')
+        if source_goods and isinstance(source_goods, dict):
+            # 消息中直接携带了浏览足迹商品信息
+            current_goods = {
+                'goods_id': str(source_goods.get('goods_id') or source_goods.get('goodsId') or ''),
+                'goods_name': str(source_goods.get('goods_name') or source_goods.get('goodsName') or ''),
+                'goods_img': str(source_goods.get('goods_img') or source_goods.get('goodsImg') or ''),
+            }
+        elif order_info and isinstance(order_info, dict):
+            # 从订单信息中组装浏览足迹（买家咨询的商品）
+            goods_name = str(order_info.get('goods_name') or '')
+            goods_id = str(order_info.get('goods_id') or order_info.get('goodsId') or '')
+            goods_img = str(order_info.get('goods_img') or order_info.get('goodsImg') or '')
+            if goods_name or goods_id:
+                current_goods = {
+                    'goods_id': goods_id,
+                    'goods_name': goods_name,
+                    'goods_img': goods_img,
+                }
+
         try:
             api_result = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: self.server_api.send_message(
                     shop_id=self.shop_id, buyer_id=buyer_id, buyer_name=buyer_name,
                     content=content, order_id=order_id, order_sn=order_id,
                     msg_type=msg_type, image_url=image_url,
+                    current_goods=current_goods,
+                    order_info=order_info if order_info else None,
                 )
             )
         except Exception as e:

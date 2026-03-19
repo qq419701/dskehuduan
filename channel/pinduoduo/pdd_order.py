@@ -13,9 +13,13 @@ ORDER_STATUS_MAP = {
 }
 
 class PddOrderCollector:
-    def __init__(self, shop_id, db_client=None):
+    def __init__(self, shop_id, db_client=None, server_api=None, shop_token=''):
         self.shop_id = shop_id
         self.db_client = db_client
+        # 服务端API客户端（用于同步订单到aikefu服务端）
+        self.server_api = server_api
+        # 店铺Token（同步到服务端时使用）
+        self.shop_token = shop_token
         self._running = False
 
     def _build_headers(self, cookies):
@@ -28,18 +32,19 @@ class PddOrderCollector:
             'Origin': 'https://mms.pinduoduo.com',
         }
 
-    async def fetch_orders(self, cookies, page=1, page_size=20):
+    async def fetch_orders(self, cookies, page=1, page_size=20, days=90):
         """
         POST https://mms.pinduoduo.com/mangkhut/mms/recentOrderList
+        参数 days 控制查询时间范围，默认90天（全量），同步时传入7天
         """
         now = int(time.time())
-        # 近90天
+        # 根据 days 参数计算时间范围
         payload = {
             'orderType': 0,
             'afterSaleType': 0,
             'remarkStatus': -1,
             'urgeShippingStatus': -1,
-            'groupStartTime': now - 90 * 86400,
+            'groupStartTime': now - days * 86400,
             'groupEndTime': now,
             'pageNumber': page,
             'pageSize': page_size,
@@ -126,24 +131,40 @@ class PddOrderCollector:
                 logger.debug('订单标准化失败: %s | %s', e, str(order)[:100])
         return normalized
 
-    async def sync_orders(self, cookies):
-        """全量同步近90天订单"""
-        logger.info('开始同步店铺 %s 的订单...', self.shop_id)
+    async def sync_orders(self, cookies, days: int = 7):
+        """
+        批量同步近N天订单（默认7天）
+        1. 分页拉取所有订单
+        2. 写入本地数据库（如有）
+        3. 如果配置了 server_api，批量上报到aikefu服务端
+        """
+        logger.info('开始同步店铺 %s 的近%d天订单...', self.shop_id, days)
         page = 1
         total = 0
+        all_orders = []  # 收集所有订单，用于批量上报
         while True:
-            orders = await self.fetch_orders(cookies, page=page, page_size=20)
+            orders = await self.fetch_orders(cookies, page=page, page_size=20, days=days)
             if not orders:
                 break
             for o in orders:
                 if self.db_client:
                     self.db_client.insert_order(self.shop_id, o)
                     total += 1
+            all_orders.extend(orders)
             if len(orders) < 20:
                 break
             page += 1
             await asyncio.sleep(1)
         logger.info('店铺 %s 订单同步完成，共 %d 条', self.shop_id, total)
+
+        # 批量上报到aikefu服务端（如已配置server_api）
+        if self.server_api and all_orders and self.shop_token:
+            try:
+                result = self.server_api.sync_orders_to_server(self.shop_token, all_orders)
+                logger.info('店铺 %s 订单已上报到服务端，结果: %s', self.shop_id, result)
+            except Exception as e:
+                logger.error('上报订单到服务端失败: %s', e)
+
         return total
 
     async def watch_new_orders(self, cookies):
