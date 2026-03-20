@@ -173,12 +173,17 @@ class PddChannel(BaseChannel):
         # ── 步骤1：用消息内容更新买家上下文缓存（订单卡片、商品卡片、浏览足迹）──
         self._ctx_manager.update_from_message(str(self.shop_id), str(buyer_id), msg)
 
-        # ── 步骤2：触发异步HTTP采集该买家的订单 ──
-        # 若是该买家首条消息且上下文为空，先等待一次立即同步采集（最多3秒），再读上下文
+        # ── 步骤2：实时采集买家订单（await，带3秒超时，确保AI回复前有订单数据）──
         if buyer_id:
-            existing_ctx = self._ctx_manager.get_context(str(self.shop_id), str(buyer_id))
-            await self._ctx_fetcher.fetch_once_if_needed(str(buyer_id), existing_ctx)
-            self._ctx_fetcher.request_fetch(buyer_id)
+            try:
+                await asyncio.wait_for(
+                    self._ctx_fetcher.fetch_and_update(str(buyer_id)),
+                    timeout=3.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning('买家 %s 订单采集超时（3s），使用缓存数据继续', buyer_id)
+            except Exception as e:
+                logger.debug('买家 %s 订单采集异常: %s', buyer_id, e)
 
         # ── 步骤3：从上下文管理器获取最新上下文（合并订单+浏览足迹）──
         buyer_ctx = self._ctx_manager.get_context(str(self.shop_id), str(buyer_id))

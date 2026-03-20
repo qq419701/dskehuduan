@@ -7,6 +7,7 @@ import asyncio
 import logging
 import time
 import aiohttp
+import config as cfg
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +36,18 @@ class PddContextFetcher:
         self._task = None
 
     def _build_headers(self) -> dict:
+        anti = cfg.get_anti_content(self.shop_id)
         cookie_str = '; '.join(f'{k}={v}' for k, v in self.cookies.items())
-        return {
+        headers = {
             'Cookie': cookie_str,
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://mms.pinduoduo.com/',
             'Content-Type': 'application/json',
             'Origin': 'https://mms.pinduoduo.com',
         }
+        if anti:
+            headers['X-Anti-Content'] = anti
+        return headers
 
     def request_fetch(self, buyer_id: str):
         """
@@ -56,6 +61,32 @@ class PddContextFetcher:
             return  # 冷却期内不重复查
         if buyer_id not in self._querying:
             self._pending_buyers.add(buyer_id)
+
+    async def fetch_and_update(self, buyer_id: str) -> bool:
+        """
+        立即采集买家订单并更新上下文（带120秒冷却期，防止短时间重复请求）。
+        由 pdd_channel 在每条买家消息时直接 await 调用，确保 AI 回复前有订单数据。
+        返回 True 表示采集到了新数据，返回 False 表示处于冷却期或未采集到数据。
+        """
+        buyer_id = str(buyer_id)
+        now = time.time()
+        last = self._last_query.get(buyer_id, 0)
+        if now - last < self._query_cooldown:
+            return False  # 冷却期内直接返回，用缓存数据
+        # 立刻标记时间戳，防止并发重入
+        self._last_query[buyer_id] = now
+        try:
+            orders = await self.fetch_buyer_orders(buyer_id)
+            if orders:
+                self.context_manager.update_from_http_orders(
+                    self.shop_id, buyer_id, orders
+                )
+                logger.info('[fetcher] 买家 %s 实时采集订单成功: %d 条', buyer_id, len(orders))
+                return True
+            return False
+        except Exception as e:
+            logger.debug('[fetcher] 买家 %s fetch_and_update 异常: %s', buyer_id, e)
+            return False
 
     async def fetch_buyer_orders(self, buyer_id: str) -> list:
         """
