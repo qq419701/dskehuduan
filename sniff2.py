@@ -14,14 +14,14 @@ anti_content_found = [""]   # 用列表让闭包可修改
 
 
 def _save_anti_content(anti: str):
-    """把抓到的 anti_content 写入 pdd_config.json，同时兼容 config.py 的读取格式"""
+    """把抓到的 anti_content 写入 pdd_config.json，同时同步到 config.json（双写）"""
     cfg_file = BASE / "pdd_config.json"
     try:
         cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
     except Exception:
         cfg = {}
 
-    # 写顶层（config.py get_anti_content 读这里）
+    # 1. 写顶层（保持原有格式）
     cfg["anti_content"] = anti
     cfg["anti_content_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -33,6 +33,31 @@ def _save_anti_content(anti: str):
     cfg_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n✅ anti_content 已自动保存到: {cfg_file}")
     print(f"   长度: {len(anti)} 字符，前30字: {anti[:30]}...")
+
+    # 2. 同步写入 config.json（config.py get_anti_content 读这里）
+    try:
+        sys.path.insert(0, str(BASE))
+        import config as _cfg
+        main_cfg_path = Path.home() / ".aikefu-client" / "config.json"
+        main_cfg = {}
+        if main_cfg_path.exists():
+            try:
+                main_cfg = json.loads(main_cfg_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        shop_ids = []
+        for s in main_cfg.get("active_shops", main_cfg.get("shops", [])):
+            sid = s.get("id") or s.get("shop_id")
+            if sid:
+                shop_ids.append(str(sid))
+        # 如果 active_shops 为空，至少写 shop_id=1
+        if not shop_ids:
+            shop_ids = ["1"]
+        for sid in shop_ids:
+            _cfg.save_anti_content(sid, anti)
+        print(f"   同步写入 config.json shop_ids={shop_ids} ✅")
+    except Exception as e:
+        print(f"   [WARN] 同步写入 config.json 失败（不影响主功能）: {e}")
 
 
 async def main():

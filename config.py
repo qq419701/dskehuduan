@@ -6,6 +6,7 @@
 import os
 import json
 import logging
+import time
 import uuid
 from typing import Optional
 
@@ -268,24 +269,71 @@ def save_pdd_transfer_settings(settings: dict) -> bool:
 def get_anti_content(shop_id: str) -> str:
     """
     获取指定店铺的 anti_content（拼多多设备指纹字符串）。
-    anti_content 是拼多多页面 JS 动态生成的，不存储在 cookie 中，需单独保存。
-    返回空字符串表示未配置。
+    优先读 config.json 的 pdd_anti_content.{shop_id}，
+    回退读项目根目录的 pdd_config.json 顶层 anti_content
+    （sniff2.py / pdd_sniff_login.py 写这里）。
     """
+    # 1. 先读 config.json（正式存储位置）
     conf = load_config()
     anti_map = conf.get("pdd_anti_content", {})
-    return anti_map.get(str(shop_id), "")
+    anti = anti_map.get(str(shop_id), "")
+    if anti:
+        return anti
+
+    # 2. 回退读 pdd_config.json（sniff 工具写的位置）
+    pdd_cfg_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "pdd_config.json"
+    )
+    try:
+        if os.path.exists(pdd_cfg_path):
+            with open(pdd_cfg_path, encoding="utf-8") as _f:
+                pdd_cfg = json.load(_f)
+            # 先找 shop_{shop_id} 子项
+            shop_key = f"shop_{shop_id}"
+            anti = (pdd_cfg.get(shop_key) or {}).get("anti_content", "")
+            if anti:
+                return anti
+            # 再找顶层 anti_content（sniff2.py 写这里）
+            anti = pdd_cfg.get("anti_content", "")
+            if anti:
+                return anti
+    except Exception:
+        pass
+    return ""
 
 
 def save_anti_content(shop_id: str, anti: str) -> bool:
     """
-    保存指定店铺的 anti_content（拼多多设备指纹字符串）。
-    anti_content 是拼多多页面 JS 动态生成的，需在浏览器中抓包后手动配置。
+    保存 anti_content，同时写入 config.json 和 pdd_config.json（双写保持一致）。
     """
+    # 写 config.json（主存储）
     conf = load_config()
     if "pdd_anti_content" not in conf:
         conf["pdd_anti_content"] = {}
     conf["pdd_anti_content"][str(shop_id)] = anti
-    return save_config(conf)
+    result = save_config(conf)
+
+    # 同步写 pdd_config.json（sniff 工具的存储位置）
+    pdd_cfg_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "pdd_config.json"
+    )
+    try:
+        pdd_cfg = {}
+        if os.path.exists(pdd_cfg_path):
+            with open(pdd_cfg_path, encoding="utf-8") as _f:
+                pdd_cfg = json.load(_f)
+        pdd_cfg["anti_content"] = anti
+        pdd_cfg["anti_content_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        shop_key = f"shop_{shop_id}"
+        if shop_key not in pdd_cfg:
+            pdd_cfg[shop_key] = {}
+        pdd_cfg[shop_key]["anti_content"] = anti
+        with open(pdd_cfg_path, "w", encoding="utf-8") as _f:
+            _json.dump(pdd_cfg, _f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass  # 同步失败不影响主流程
+
+    return result
 
 
 # ── 拼多多各店铺转人工客服配置 ─────────────────────────────────────────────────

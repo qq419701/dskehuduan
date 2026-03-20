@@ -6,7 +6,10 @@ import os
 import sys
 import requests
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".aikefu-client", "config.json")
+BROWSER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".aikefu-client", "browser_data")
 
 REMARK_KEYS = {
     "remarkName", "remark", "memo", "tag", "comment", "note",
@@ -16,11 +19,34 @@ REMARK_KEYS = {
 
 def load_config():
     if not os.path.exists(CONFIG_FILE):
-        print("ERROR: config file not found: " + CONFIG_FILE)
-        print("Please login to pdd first in the main app")
-        sys.exit(1)
+        print("WARN: config file not found: " + CONFIG_FILE)
+        return {}
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
+
+def load_cookies_from_file(shop_id: str) -> dict:
+    """从 aikefu_cookies.json 文件加载 cookies（与主程序保持一致）"""
+    cookies_path = os.path.join(BROWSER_DATA_DIR, f"shop_{shop_id}", "aikefu_cookies.json")
+    if os.path.exists(cookies_path):
+        try:
+            with open(cookies_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print("  WARN: cookies file load error: " + str(e))
+    return {}
+
+def get_shop_ids_from_browser_data() -> list:
+    """从 browser_data 目录扫描所有已登录的店铺ID"""
+    shop_ids = []
+    if not os.path.isdir(BROWSER_DATA_DIR):
+        return shop_ids
+    for name in sorted(os.listdir(BROWSER_DATA_DIR)):
+        if name.startswith("shop_"):
+            sid = name[len("shop_"):]
+            cookies_path = os.path.join(BROWSER_DATA_DIR, name, "aikefu_cookies.json")
+            if os.path.exists(cookies_path):
+                shop_ids.append(sid)
+    return shop_ids
 
 def make_session(cookies, anti):
     sess = requests.Session()
@@ -93,15 +119,35 @@ def parse_agents(data, label):
 
 def main():
     cfg = load_config()
-    shops = cfg.get("shops", [])
-    if not shops:
-        print("ERROR: no shops found in config")
-        sys.exit(1)
 
-    shop = shops[0]
-    shop_id = str(shop.get("shop_id", "1"))
-    cookies = shop.get("cookies") or {}
-    anti = shop.get("anti_content") or cfg.get("anti_content") or ""
+    # 优先从 active_shops（主程序存储格式）读取店铺ID，兼容旧 shops 键
+    shops = cfg.get("active_shops", cfg.get("shops", []))
+    if shops:
+        shop = shops[0]
+        shop_id = str(shop.get("id", shop.get("shop_id", "1")))
+    else:
+        # active_shops 为空时，扫描 browser_data 目录找已登录的店铺
+        shop_ids = get_shop_ids_from_browser_data()
+        if shop_ids:
+            shop_id = shop_ids[0]
+            print("INFO: no shops in config, using browser_data shop_id=" + shop_id)
+        else:
+            print("ERROR: no shops found in config or browser_data")
+            print("Please login first: python tools/pdd_sniff_login.py [shop_id]")
+            sys.exit(1)
+
+    # 从文件加载 cookies（主程序写法）
+    cookies = load_cookies_from_file(shop_id)
+    if not cookies:
+        print("WARN: no cookies found for shop_id=" + shop_id)
+        print("Please login first: python tools/pdd_sniff_login.py " + shop_id)
+
+    # 使用 config.py 的 get_anti_content（支持双路回退）
+    try:
+        import config as _cfg
+        anti = _cfg.get_anti_content(shop_id)
+    except Exception:
+        anti = ""
 
     print("shop_id=" + shop_id)
     print("cookies keys: " + str(list(cookies.keys())[:8]))
