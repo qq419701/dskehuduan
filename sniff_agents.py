@@ -35,8 +35,11 @@ def make_session(cookies, anti):
         "Content-Type": "application/json",
         "X-Anti-Content": anti,
     })
+    # ★ 修复：同时绑定到 mms.pinduoduo.com 和 .pinduoduo.com 两个域
+    # requests 对子域名 cookie 匹配规则与浏览器不同，必须双绑才能覆盖所有拼多多接口
     for k, v in cookies.items():
-        sess.cookies.set(k, v, domain=".pinduoduo.com")
+        sess.cookies.set(k, v, domain="mms.pinduoduo.com", path="/")
+        sess.cookies.set(k, v, domain=".pinduoduo.com", path="/")
     return sess
 
 def print_agent(uid_key, item):
@@ -73,150 +76,69 @@ def parse_agents(data, label):
                 break
 
     if cs_map is None:
-        print("  WARNING: wu fa zhao dao ke fu lie biao, xiang ying ding ceng zi duan: " + str(list(data.keys())))
-        return []
+        print("  [WARN] mei you zhao dao ke fu lie biao zi duan!")
+        return
 
     if isinstance(cs_map, list):
-        cs_map = {str(i): item for i, item in enumerate(cs_map)}
-
-    agents = []
-    if isinstance(cs_map, dict):
-        for uid_key, item in cs_map.items():
-            if not isinstance(item, dict):
-                continue
-            print_agent(uid_key, item)
-            agents.append({"key": uid_key, "data": item})
-    else:
-        print("  WARNING: cs_map lei xing yi chang: " + str(type(cs_map)))
-
-    return agents
-
-def try_v1(sess, anti):
-    url = "https://mms.pinduoduo.com/latitude/assign/getAssignCsList"
-    print("\n" + "="*60)
-    print("[jie kou v1] " + url)
-    try:
-        r = sess.post(url, json={"wechatCheck": True, "anti_content": anti}, timeout=15)
-        print("  zhuang tai ma: " + str(r.status_code))
-        if r.status_code != 200:
-            print("  ERROR: fei 200, tiao guo")
-            return None
-        data = r.json()
-        if not data.get("success"):
-            msg = data.get("errorMsg") or data.get("error_msg") or str(data)[:200]
-            print("  ERROR: success=False: " + str(msg))
-            return None
-        agents = parse_agents(data, "v1")
-        print("  OK: jie xi dao " + str(len(agents)) + " ge ke fu")
-        return agents
-    except Exception as e:
-        print("  ERROR: yi chang: " + str(e))
-        return None
-
-def try_v2(sess):
-    url = "https://mms.pinduoduo.com/mms/api/cs/online_list"
-    print("\n" + "="*60)
-    print("[jie kou v2] " + url)
-    try:
-        r = sess.get(url, timeout=15)
-        print("  zhuang tai ma: " + str(r.status_code))
-        if r.status_code != 200:
-            print("  ERROR: fei 200, tiao guo")
-            return None
-        data = r.json()
-        if not (data.get("success") or data.get("result")):
-            print("  ERROR: jie kou fan hui shi bai: " + str(data)[:200])
-            return None
-        agents = parse_agents(data, "v2")
-        print("  OK: jie xi dao " + str(len(agents)) + " ge ke fu")
-        return agents
-    except Exception as e:
-        print("  ERROR: yi chang: " + str(e))
-        return None
-
-def try_v3(sess):
-    url = "https://mms.pinduoduo.com/service/im/cs/list"
-    print("\n" + "="*60)
-    print("[jie kou v3] " + url)
-    try:
-        r = sess.get(url, timeout=15)
-        print("  zhuang tai ma: " + str(r.status_code))
-        if r.status_code != 200:
-            print("  ERROR: fei 200, tiao guo")
-            return None
-        data = r.json()
-        if not (data.get("success") or data.get("result")):
-            print("  ERROR: jie kou fan hui shi bai: " + str(data)[:200])
-            return None
-        agents = parse_agents(data, "v3")
-        print("  OK: jie xi dao " + str(len(agents)) + " ge ke fu")
-        return agents
-    except Exception as e:
-        print("  ERROR: yi chang: " + str(e))
-        return None
-
-def run_for_shop(shop_id, cookies, anti):
-    print("\n" + "#"*60)
-    print("# shop_id=" + str(shop_id) + "  cookies=" + str(len(cookies)) + "ge  anti=" + ("yi pei zhi" if anti else "wei pei zhi"))
-    print("#"*60)
-
-    if not cookies:
-        print("  WARNING: cookies wei kong, tiao guo gai dian pu")
-        return {}
-
-    sess = make_session(cookies, anti)
-    result = {"shop_id": shop_id, "v1": None, "v2": None, "v3": None}
-
-    agents = try_v1(sess, anti)
-    result["v1"] = agents
-
-    if agents is None:
-        agents = try_v2(sess)
-        result["v2"] = agents
-
-    if agents is None:
-        agents = try_v3(sess)
-        result["v3"] = agents
-
-    if agents is None:
-        print("\n  ERROR: san ge jie kou jun shi bai, cookies ke neng yi guo qi")
-    elif len(agents) == 0:
-        print("\n  WARNING: jie kou cheng gong dan ke fu lie biao wei kong")
-    else:
-        print("\n  OK: gong zhao dao " + str(len(agents)) + " ge ke fu")
-
-    return result
+        print("  -> ke fu lie biao chang du=" + str(len(cs_map)))
+        for i, item in enumerate(cs_map[:3]):
+            print_agent(i, item)
+    elif isinstance(cs_map, dict):
+        print("  -> ke fu zi dian, jian shu=" + str(len(cs_map)))
+        for uid_key, item in list(cs_map.items())[:3]:
+            if isinstance(item, dict):
+                print_agent(uid_key, item)
+            else:
+                print("  --- key=" + str(uid_key) + " value=" + repr(item)[:80])
 
 def main():
-    print("=" * 60)
-    print("  PDD ke fu lie biao zi duan zhen duan gong ju")
-    print("=" * 60)
-
     cfg = load_config()
-    shops = cfg.get("active_shops", [])
-    anti_map = cfg.get("pdd_anti_content", {})
-
+    shops = cfg.get("shops", [])
     if not shops:
-        print("ERROR: config.json li mei you active_shops")
+        print("ERROR: no shops found in config")
         sys.exit(1)
 
-    print("\n zhao dao " + str(len(shops)) + " ge dian pu")
+    shop = shops[0]
+    shop_id = str(shop.get("shop_id", "1"))
+    cookies = shop.get("cookies") or {}
+    anti = shop.get("anti_content") or cfg.get("anti_content") or ""
 
-    all_results = []
-    for shop in shops:
-        shop_id = str(shop.get("id") or shop.get("shop_id") or "")
-        cookies = shop.get("cookies") or shop.get("pdd_cookies") or {}
-        anti = anti_map.get(shop_id, "")
-        res = run_for_shop(shop_id, cookies, anti)
-        all_results.append(res)
+    print("shop_id=" + shop_id)
+    print("cookies keys: " + str(list(cookies.keys())[:8]))
+    print("anti_content: " + (anti[:30] + "..." if anti else "(EMPTY)"))
 
-    out_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents_result.json")
-    with open(out_file, "w", encoding="utf-8") as f:
-        json.dump(all_results, f, ensure_ascii=False, indent=2)
+    sess = make_session(cookies, anti)
 
-    print("\n" + "="*60)
-    print("OK: zhen duan wan cheng! jie guo yi bao cun dao: " + out_file)
-    print("="*60)
+    urls = [
+        ("POST", "https://mms.pinduoduo.com/assistant/staff/getOnlineStaffList", {}),
+        ("POST", "https://mms.pinduoduo.com/im/cs/getOnlineStaff", {}),
+        ("POST", "https://mms.pinduoduo.com/chatbot/cs/onlineList", {}),
+        ("POST", "https://mms.pinduoduo.com/mangkhut/mms/getOnlineCsList", {}),
+        ("GET",  "https://mms.pinduoduo.com/assistant/staff/getOnlineStaffList", None),
+        ("POST", "https://mms.pinduoduo.com/assistant/chat/getTransferStaffList", {}),
+        ("POST", "https://mms.pinduoduo.com/chats/getStaffList", {}),
+    ]
+
+    found = False
+    for method, url, body in urls:
+        try:
+            if method == "POST":
+                r = sess.post(url, json=body, timeout=8)
+            else:
+                r = sess.get(url, timeout=8)
+            print("\n[" + method + "] " + url)
+            print("  status=" + str(r.status_code))
+            try:
+                data = r.json()
+                parse_agents(data, url)
+                found = True
+            except Exception:
+                print("  fei JSON xiang ying: " + r.text[:200])
+        except Exception as e:
+            print("\n[" + method + "] " + url + " -> ERROR: " + str(e))
+
+    if not found:
+        print("\n[WARN] suo you jie kou jun wei fan hui ke fu lie biao, qing jian cha cookies shi fou you xiao")
 
 if __name__ == "__main__":
     main()
