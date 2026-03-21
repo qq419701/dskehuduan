@@ -83,6 +83,7 @@ class ServerAPI:
         order_id: str = "",
         order_sn: str = "",
         msg_type: str = "text",
+        image_url: str = "",
         order_info: dict = None,
         current_goods: dict = None,
     ) -> dict:
@@ -90,6 +91,7 @@ class ServerAPI:
         通过shop_token推送买家消息（客户端/插件通用接口）
         POST /api/webhook/pdd
         新增参数：
+          image_url     - 图片消息的URL
           current_goods - 买家当前浏览的商品信息（含 goods_id、goods_name、goods_img）
         """
         payload = {
@@ -98,6 +100,7 @@ class ServerAPI:
             "buyer_name": buyer_name,
             "content": content,
             "msg_type": msg_type,
+            "image_url": image_url or "",
             "order_id": order_id or "",
             "order_sn": order_sn or order_id or "",
             "order_info": order_info or {},
