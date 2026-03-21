@@ -139,6 +139,10 @@ class PddContextFetcher:
             if not data.get('success'):
                 return None
             result = data.get('result') or data.get('data') or {}
+            # singleRecommendGoods 接口返回的 result 是列表（每个元素含 goodsList/total）
+            if isinstance(result, list):
+                first = result[0] if result else {}
+                result = first if isinstance(first, dict) else {}
             goods_list = result.get('goodsList') or result.get('list') or []
             if not goods_list:
                 return None
@@ -172,8 +176,9 @@ class PddContextFetcher:
         返回原始订单列表（不做标准化，由 pdd_context.update_from_http_orders 消费）
         """
         payload = {
+            'orderStatus': -1,
             'uid': str(buyer_id),   # 新接口用 uid，不是 buyerUid
-            'pageNum': 1,
+            'pageNo': 1,
             'pageSize': 10,
         }
         try:

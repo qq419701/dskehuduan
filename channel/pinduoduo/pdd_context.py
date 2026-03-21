@@ -127,7 +127,7 @@ class BuyerContextManager:
         latest = orders[0]
         order_sn = str(
             latest.get('orderSn') or latest.get('order_sn') or
-            latest.get('sn') or ''
+            latest.get('sn') or latest.get('id') or ''
         )
         if order_sn and order_sn != ctx.order_sn:
             ctx.order_sn = order_sn
