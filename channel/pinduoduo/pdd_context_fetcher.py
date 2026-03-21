@@ -4,6 +4,7 @@
 无需拼多多开放API，使用客户端 cookies 鉴权
 """
 import asyncio
+import json
 import logging
 import time
 from typing import Optional
@@ -65,7 +66,10 @@ class PddContextFetcher:
         if isinstance(result, list):
             return result
         if isinstance(result, dict):
-            for field in ('orderList', 'list', 'orders', 'items', 'data', 'records'):
+            # 扩展字段列表，覆盖拼多多API可能使用的各种字段名
+            for field in ('orderList', 'list', 'orders', 'items', 'data', 'records',
+                          'orderSnList', 'orderInfoList', 'orderVOList', 'orderDetailList',
+                          'content', 'rows', 'orderInfos'):
                 val = result.get(field)
                 if val and isinstance(val, list):
                     return val
@@ -180,6 +184,10 @@ class PddContextFetcher:
                 result = first if isinstance(first, dict) else {}
             goods_list = result.get('goodsList') or result.get('list') or []
             if not goods_list:
+                logger.warning('[fetcher] 买家 %s 浏览足迹接口返回success但商品列表为空！'
+                               'result完整结构: %s',
+                               buyer_id,
+                               json.dumps(result, ensure_ascii=False, indent=2)[:500])
                 return None
             # 优先取有"历史浏览"标签的商品
             footprint_goods = None
@@ -241,6 +249,10 @@ class PddContextFetcher:
                                     logger.debug('[fetcher] 买家 %s 首条订单字段: %s', buyer_id, list(orders[0].keys()) if orders[0] else [])
                                     return orders
                                 else:
+                                    logger.warning('[fetcher] 买家 %s latitude接口返回success但订单列表为空！'
+                                                   'result完整结构: %s',
+                                                   buyer_id,
+                                                   json.dumps(result, ensure_ascii=False, indent=2)[:500] if isinstance(result, dict) else str(result)[:200])
                                     logger.debug('[fetcher] 买家 %s latitude接口返回success但解析订单为空，result结构: %s',
                                                  buyer_id, list(result.keys()) if isinstance(result, dict) else type(result).__name__)
                             else:
