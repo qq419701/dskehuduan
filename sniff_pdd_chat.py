@@ -11,6 +11,7 @@ sniff_pdd_chat.py — 拼多多聊天窗口全能接口嗅探脚本
 """
 import asyncio
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -133,8 +134,31 @@ async def _handle_response(response) -> None:
         }
         http_apis.append(entry)
         print(_http(f"捕获 [{label}] {url}"))
-        print(_http(f"  请求 payload:\n{_dump(req_payload)}"))
-        print(_http(f"  响应 (完整):\n{_dump(resp_json)}"))
+        # 只打印请求关键字段，不打印完整 payload
+        if isinstance(req_payload, dict):
+            key_fields = {k: v for k, v in req_payload.items()
+                          if k in ('buyerUid', 'buyer_uid', 'pageNumber', 'pageSize', 'orderType')}
+            print(_http(f"  请求关键字段: {key_fields}"))
+        else:
+            print(_http(f"  请求: {str(req_payload)[:100]}"))
+
+        # 响应只打印成功状态和数据条数
+        if isinstance(resp_json, dict):
+            success = resp_json.get('success')
+            result = resp_json.get('result') or resp_json.get('data') or {}
+            order_list = []
+            if isinstance(result, dict):
+                order_list = result.get('orderList') or result.get('list') or []
+            elif isinstance(result, list):
+                order_list = result
+            print(_http(f"  响应: success={success} | 订单条数={len(order_list)}"))
+            if order_list:
+                first = order_list[0]
+                order_sn = first.get('orderSn') or first.get('order_sn') or first.get('sn') or ''
+                goods_name = first.get('goodsName') or first.get('goods_name') or ''
+                buyer_uid = first.get('buyerId') or first.get('buyerUid') or ''
+                print(_http(f"  第一条订单: order_sn={order_sn} | goods_name={str(goods_name)[:30]} | buyer={buyer_uid}"))
+        # 完整响应依然写入文件（通过 http_apis 列表在结尾保存）
 
         # 更新诊断
         if is_order_list:
@@ -291,19 +315,33 @@ def _handle_ws_frame(raw_payload: str, direction: str) -> None:
     }
     ws_messages.append(entry)
 
-    # 控制台输出
+    # 控制台输出（只打印摘要，完整JSON写入文件）
     if "WS-BIZ" in labels:
-        print(_ws_biz(f"[{direction}] 发现 BIZ 上下文 msg_category={msg_category} source_goods={source_goods_found}"))
-        print(_ws_biz(f"  完整消息:\n{_dump(msg)}"))
+        goods_name = biz.get('goodsName') or biz.get('goods_name') or biz.get('sourceGoodsName') or ''
+        goods_id = biz.get('goodsId') or biz.get('goods_id') or biz.get('sourceGoodsId') or ''
+        order_sn = biz.get('orderSn') or biz.get('order_sn') or ''
+        print(_ws_biz(
+            f"[{direction}] BIZ上下文 | msg_category={msg_category} | "
+            f"source_goods={source_goods_found} | goods_id={goods_id} | "
+            f"goods_name={str(goods_name)[:30] if goods_name else ''} | order_sn={order_sn}"
+        ))
         _update_biz_diag(msg, biz, msg_category, source_goods_found)
-    if "WS-ORDER" in labels:
-        print(_ws_order(f"[{direction}] 发现订单/商品字段"))
-        if "WS-BIZ" not in labels:
-            print(_ws_order(f"  完整消息:\n{_dump(msg)}"))
+
+    if "WS-ORDER" in labels and "WS-BIZ" not in labels:
+        raw_str = json.dumps(msg, ensure_ascii=False)
+        order_sn = ''
+        for k in ('orderSn', 'order_sn', 'sn'):
+            m2 = re.search(rf'"{k}"\s*:\s*"([^"]+)"', raw_str)
+            if m2:
+                order_sn = m2.group(1)
+                break
+        print(_ws_order(f"[{direction}] 订单/商品字段 | order_sn={order_sn}"))
+
     if "WS-MSG" in labels:
-        print(_ws_msg(f"[{direction}] 买家消息 buyer_id={buyer_id or '(空)'} content={str(content)[:80]}"))
-        if "WS-BIZ" not in labels and "WS-ORDER" not in labels:
-            print(_ws_msg(f"  完整消息:\n{_dump(msg)}"))
+        print(_ws_msg(
+            f"[{direction}] 买家消息 | buyer_id={buyer_id or '(空)'} | "
+            f"content={str(content)[:100]}"
+        ))
 
 
 def _update_biz_diag(msg: Any, biz: dict, msg_category: Any, source_goods_found: bool) -> None:
@@ -558,6 +596,26 @@ async def main() -> None:
             ))
             if buyer_msgs:
                 print(_c("1;32", "  ✅ 已捕获到买家消息！"))
+
+        print()
+        print(_c("1;33", ">>> 步骤3：请手动复制一个商品链接，在聊天窗口发给买家（或让买家发给你）<<<"))
+        print(_info("目的：测试 yangkeduo.com/goods.html?goods_id=xxx 链接是否被正确识别"))
+        print(_info("等待30秒捕获商品链接消息..."))
+        print()
+
+        for _ in range(6):
+            await asyncio.sleep(5)
+            goods_link_msgs = [
+                m for m in ws_messages
+                if 'yangkeduo' in str(m.get('content', '')) or 'pinduoduo' in str(m.get('content', ''))
+            ]
+            print(_info(
+                f"  [{_ts()}] 已捕获: HTTP={len(http_apis)} WS={len(ws_messages)} "
+                f"商品链接消息={len(goods_link_msgs)}"
+            ))
+            if goods_link_msgs:
+                last = goods_link_msgs[-1]
+                print(_c("1;32", f"  ✅ 捕获到商品链接消息！content={str(last.get('content',''))[:80]}"))
 
         print()
         print(_info("嗅探完成，正在关闭浏览器..."))

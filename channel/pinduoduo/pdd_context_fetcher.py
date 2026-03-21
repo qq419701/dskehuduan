@@ -6,6 +6,7 @@
 import asyncio
 import logging
 import time
+from typing import Optional
 import aiohttp
 import config as cfg
 
@@ -13,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 # 拼多多商家后台订单列表接口
 PDD_ORDER_LIST_URL = 'https://mms.pinduoduo.com/mangkhut/mms/recentOrderList'
+# 买家浏览足迹接口
+PDD_RECOMMEND_GOODS_URL = 'https://mms.pinduoduo.com/leopard/api/latitude/goods/singleRecommendGoods'
 
 
 class PddContextFetcher:
@@ -64,29 +67,94 @@ class PddContextFetcher:
 
     async def fetch_and_update(self, buyer_id: str) -> bool:
         """
-        立即采集买家订单并更新上下文（带120秒冷却期，防止短时间重复请求）。
-        由 pdd_channel 在每条买家消息时直接 await 调用，确保 AI 回复前有订单数据。
+        立即并发采集买家订单和浏览足迹，更新上下文（带120秒冷却期）。
+        由 pdd_channel 在每条买家消息时直接 await 调用，确保 AI 回复前有上下文数据。
         返回 True 表示采集到了新数据，返回 False 表示处于冷却期或未采集到数据。
         """
         buyer_id = str(buyer_id)
         now = time.time()
         last = self._last_query.get(buyer_id, 0)
         if now - last < self._query_cooldown:
-            return False  # 冷却期内直接返回，用缓存数据
-        # 立刻标记时间戳，防止并发重入
+            return False
         self._last_query[buyer_id] = now
         try:
-            orders = await self.fetch_buyer_orders(buyer_id)
-            if orders:
-                self.context_manager.update_from_http_orders(
-                    self.shop_id, buyer_id, orders
-                )
+            # 并发采集：订单 + 浏览足迹
+            orders_task = asyncio.create_task(self.fetch_buyer_orders(buyer_id))
+            footprint_task = asyncio.create_task(self.fetch_buyer_footprint(buyer_id))
+            orders, footprint = await asyncio.gather(orders_task, footprint_task, return_exceptions=True)
+
+            updated = False
+            if isinstance(orders, list) and orders:
+                self.context_manager.update_from_http_orders(self.shop_id, buyer_id, orders)
                 logger.info('[fetcher] 买家 %s 实时采集订单成功: %d 条', buyer_id, len(orders))
-                return True
-            return False
+                updated = True
+            elif isinstance(orders, Exception):
+                logger.debug('[fetcher] 买家 %s 订单采集异常: %s', buyer_id, orders)
+            if isinstance(footprint, dict) and footprint:
+                # 只有当上下文中没有 current_goods 时才用接口数据（WS直接数据优先级更高）
+                ctx = self.context_manager.get_context(self.shop_id, buyer_id)
+                if not ctx.get('current_goods'):
+                    self.context_manager.update_footprint(self.shop_id, buyer_id, footprint)
+                    logger.info('[fetcher] 买家 %s 浏览足迹采集成功: %s', buyer_id, footprint.get('goods_name', ''))
+                    updated = True
+            elif isinstance(footprint, Exception):
+                logger.debug('[fetcher] 买家 %s 浏览足迹采集异常: %s', buyer_id, footprint)
+            return updated
         except Exception as e:
             logger.debug('[fetcher] 买家 %s fetch_and_update 异常: %s', buyer_id, e)
             return False
+
+    async def fetch_buyer_footprint(self, buyer_id: str, conversation_id: str = '') -> Optional[dict]:
+        """
+        通过 singleRecommendGoods 接口获取买家浏览足迹
+        返回最近浏览的商品信息（goods_id, goods_name, goods_img）
+        """
+        payload = {
+            'type': 2,
+            'uid': str(buyer_id),
+            'conversationId': conversation_id,
+            'pageSize': 5,
+            'pageNum': 1,
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    PDD_RECOMMEND_GOODS_URL,
+                    json=payload,
+                    headers=self._build_headers(),
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json(content_type=None)
+            if not data.get('success'):
+                return None
+            result = data.get('result') or data.get('data') or {}
+            goods_list = result.get('goodsList') or result.get('list') or []
+            if not goods_list:
+                return None
+            # 优先取有"历史浏览"标签的商品
+            footprint_goods = None
+            for g in goods_list:
+                tags = g.get('goodsTag') or {}
+                footprint_tags = tags.get('footprintTags') or []
+                for t in footprint_tags:
+                    if '浏览' in str(t.get('desc', '')):
+                        footprint_goods = g
+                        break
+                if footprint_goods:
+                    break
+            # 没有足迹标签，取第一个
+            target = footprint_goods or goods_list[0]
+            goods_id = str(target.get('goodsId') or target.get('goods_id') or '')
+            goods_name = str(target.get('goodsName') or target.get('goods_name') or '')
+            goods_img = str(target.get('goodsImageUrl') or target.get('thumbUrl') or target.get('goods_img') or '')
+            if goods_id or goods_name:
+                return {'goods_id': goods_id, 'goods_name': goods_name, 'goods_img': goods_img}
+            return None
+        except Exception as e:
+            logger.debug('[fetcher] 买家 %s 浏览足迹采集异常: %s', buyer_id, e)
+            return None
 
     async def fetch_buyer_orders(self, buyer_id: str) -> list:
         """

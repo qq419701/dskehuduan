@@ -5,9 +5,37 @@
 """
 import json
 import logging
+import re
 from typing import Optional
+from urllib.parse import urlparse, parse_qs
 
 logger = logging.getLogger(__name__)
+
+def _extract_goods_from_url(text: str) -> Optional[dict]:
+    """从拼多多商品URL提取goods_id"""
+    goods_id = None
+    # 匹配 yangkeduo.com 或 mobile.pinduoduo.com 的商品链接
+    pattern = (
+        r'https?://(?:mobile\.yangkeduo\.com|mobile\.pinduoduo\.com|yangkeduo\.com)'
+        r'/goods(?:\.html|/detail)[^\s]*goods_id=(\d+)[^\s]*'
+    )
+    m = re.search(pattern, text)
+    if m:
+        goods_id = m.group(1)
+    elif 'yangkeduo' in text or 'pinduoduo' in text:
+        # 宽泛匹配：只要 URL 含拼多多域名且包含 goods_id 参数
+        m2 = re.search(r'goods_id=(\d+)', text)
+        if m2:
+            goods_id = m2.group(1)
+
+    if goods_id:
+        return {
+            'goods_id': goods_id,
+            'goods_name': '',
+            'goods_img': '',
+        }
+    return None
+
 
 MSG_TYPE_MAP = {
     0: 'text', 1: 'text', 2: 'image', 3: 'audio',
@@ -115,6 +143,15 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
     # 从biz上下文提取浏览足迹（买家进入会话时携带的商品信息）
     source_goods = _extract_source_goods_from_biz(biz)
 
+    # 识别买家发送的拼多多商品链接
+    if msg_type == 'text' and content and not source_goods:
+        extracted = _extract_goods_from_url(content)
+        if extracted:
+            source_goods = extracted
+            msg_type = 'goods'
+            order_info = {'goods_id': extracted['goods_id'], 'goods_name': ''}
+            content = f"[商品链接] {content}"
+
     # msg_category=4/5 是"买家进入会话"通知，不含用户文字但含商品上下文
     # 这类消息在 content 为空时也应该传递浏览足迹
     is_enter_session = int(msg_category) in (4, 5) or msg_type == 'system'
@@ -217,6 +254,15 @@ def _parse_old_format(body: dict) -> Optional[dict]:
     # 从biz上下文提取浏览足迹（旧格式消息）
     biz_old = body.get('push_biz_context') or body.get('bizContext') or {}
     source_goods = _extract_source_goods_from_biz(biz_old)
+
+    # 识别买家发送的拼多多商品链接
+    if msg_type == 'text' and content and not source_goods:
+        extracted = _extract_goods_from_url(content)
+        if extracted:
+            source_goods = extracted
+            msg_type = 'goods'
+            order_info = {'goods_id': extracted['goods_id'], 'goods_name': ''}
+            content = f"[商品链接] {content}"
 
     if not buyer_id and not content:
         return None

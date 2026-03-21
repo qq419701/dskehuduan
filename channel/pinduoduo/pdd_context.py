@@ -148,6 +148,18 @@ class BuyerContextManager:
             return ctx.to_dict()
         return {}
 
+    def update_footprint(self, shop_id: str, buyer_id: str, goods: dict):
+        """从HTTP接口采集的浏览足迹更新上下文（WS直接数据优先级更高，不覆盖已有数据）"""
+        ctx = self._get_ctx(shop_id, buyer_id)
+        if goods.get('goods_id') or goods.get('goods_name'):
+            ctx.current_goods = {
+                'goods_id': str(goods.get('goods_id') or ''),
+                'goods_name': str(goods.get('goods_name') or ''),
+                'goods_img': str(goods.get('goods_img') or ''),
+            }
+            logger.info('买家 %s 浏览足迹已更新（HTTP singleRecommendGoods）: %s',
+                        buyer_id, goods.get('goods_name', ''))
+
     def cleanup_expired(self):
         """清理过期的上下文缓存，防止内存泄漏"""
         for shop_id in list(self._store.keys()):
