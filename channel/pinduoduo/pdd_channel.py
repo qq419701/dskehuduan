@@ -14,6 +14,7 @@ HEARTBEAT_INTERVAL = 30
 class PddChannel(BaseChannel):
     def __init__(self, shop_id, shop_info, im_token, cookies, db_client=None, server_api=None, sender=None):
         super().__init__(shop_id, shop_info)
+        self.shop_token = shop_info.get('shop_token', '') if shop_info else ''
         self.im_token = im_token
         self.cookies = cookies
         self.db_client = db_client
@@ -258,16 +259,32 @@ class PddChannel(BaseChannel):
         if not self.server_api: return
 
         # ── 步骤4：将消息+完整上下文发送到服务端 ──
+        # 优先使用 send_message_by_token()（走 /api/webhook/pdd，能正确处理 order_info 和 current_goods）
+        # 若无 shop_token 则回退到 send_message()（功能受限，order_info/current_goods 可能不被处理）
         try:
-            api_result = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: self.server_api.send_message(
-                    shop_id=self.shop_id, buyer_id=buyer_id, buyer_name=buyer_name,
-                    content=content, order_id=order_id, order_sn=order_id,
-                    msg_type=msg_type, image_url=image_url,
-                    current_goods=current_goods,
-                    order_info=order_info if order_info else None,
+            if self.shop_token and hasattr(self.server_api, 'send_message_by_token'):
+                logger.debug('使用 send_message_by_token 发送消息（shop_token已配置）')
+                api_result = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: self.server_api.send_message_by_token(
+                        shop_token=self.shop_token,
+                        buyer_id=buyer_id, buyer_name=buyer_name,
+                        content=content, order_id=order_id, order_sn=order_id,
+                        msg_type=msg_type, image_url=image_url,
+                        current_goods=current_goods,
+                        order_info=order_info if order_info else None,
+                    )
                 )
-            )
+            else:
+                logger.debug('使用 send_message 发送消息（无 shop_token，order_info/current_goods 可能不被处理）')
+                api_result = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: self.server_api.send_message(
+                        shop_id=self.shop_id, buyer_id=buyer_id, buyer_name=buyer_name,
+                        content=content, order_id=order_id, order_sn=order_id,
+                        msg_type=msg_type, image_url=image_url,
+                        current_goods=current_goods,
+                        order_info=order_info if order_info else None,
+                    )
+                )
         except Exception as e:
             logger.error('API调用异常: %s', e); return
 
