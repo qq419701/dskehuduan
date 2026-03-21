@@ -55,6 +55,19 @@ class PddContextFetcher:
             headers['X-Anti-Content'] = anti
         return headers
 
+    @staticmethod
+    def _is_redirected(url: str) -> bool:
+        return '/other/404' in url or '__from=' in url
+
+    @staticmethod
+    def _extract_orders(data: dict) -> list:
+        result = data.get('result') or data.get('data') or {}
+        if isinstance(result, dict):
+            return result.get('orderList') or result.get('list') or result.get('orders') or []
+        if isinstance(result, list):
+            return result
+        return []
+
     def request_fetch(self, buyer_id: str):
         """
         请求异步采集某买家的订单（非阻塞）
@@ -129,8 +142,7 @@ class PddContextFetcher:
                 ) as resp:
                     if resp.status != 200:
                         return None
-                    final_url = str(resp.url)
-                    if '/other/404' in final_url or '__from=' in final_url:
+                    if self._is_redirected(str(resp.url)):
                         logger.warning('[fetcher] 浏览足迹接口被重定向（session过期）: %s', final_url)
                         return None
                     try:
@@ -193,19 +205,13 @@ class PddContextFetcher:
                 ) as resp:
                     if resp.status == 200:
                         final_url = str(resp.url)
-                        if '/other/404' not in final_url and '__from=' not in final_url:
+                        if not self._is_redirected(final_url):
                             try:
                                 data = await resp.json(content_type=None)
                             except Exception:
                                 data = {}
                             if data.get('success'):
-                                result = data.get('result') or data.get('data') or {}
-                                if isinstance(result, dict):
-                                    orders = result.get('orderList') or result.get('list') or result.get('orders') or []
-                                elif isinstance(result, list):
-                                    orders = result
-                                else:
-                                    orders = []
+                                orders = self._extract_orders(data)
                                 if orders:
                                     logger.info('买家 %s 通过latitude接口查到 %d 条订单', buyer_id, len(orders))
                                     return orders
@@ -242,7 +248,7 @@ class PddContextFetcher:
                         logger.debug('买家 %s 兜底订单查询返回 %d', buyer_id, resp.status)
                         return []
                     final_url = str(resp.url)
-                    if '/other/404' in final_url or '__from=' in final_url:
+                    if self._is_redirected(final_url):
                         logger.warning('兜底订单接口被重定向（session过期）: %s', final_url)
                         return []
                     try:
@@ -256,13 +262,7 @@ class PddContextFetcher:
                 logger.debug('买家 %s 兜底订单查询失败: %s', buyer_id, err)
                 return []
 
-            result = data.get('result') or data.get('data') or {}
-            if isinstance(result, dict):
-                orders = result.get('orderList') or result.get('list') or result.get('orders') or []
-            elif isinstance(result, list):
-                orders = result
-            else:
-                orders = []
+            orders = self._extract_orders(data)
 
             logger.info('买家 %s 通过兜底接口查到 %d 条近7天订单', buyer_id, len(orders))
             return orders
