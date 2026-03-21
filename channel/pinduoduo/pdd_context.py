@@ -101,7 +101,7 @@ class BuyerContextManager:
                 }
                 logger.info('买家 %s 浏览足迹已更新（商品卡片）: %s %s', buyer_id, goods_id, goods_name)
 
-        # 3. 消息中携带 source_goods（WS biz 上下文中的浏览商品）
+        # 3. 兜底：任何消息类型，只要有 source_goods 字段就更新浏览足迹缓存
         source_goods = msg.get('source_goods')
         if source_goods and isinstance(source_goods, dict):
             goods_id = str(source_goods.get('goods_id') or source_goods.get('goodsId') or '')
@@ -113,7 +113,7 @@ class BuyerContextManager:
                     'goods_name': goods_name,
                     'goods_img': goods_img,
                 }
-                logger.info('买家 %s 浏览足迹已更新（source_goods）: %s %s', buyer_id, goods_id, goods_name)
+                logger.debug('买家 %s 浏览足迹已更新（source_goods兜底）: %s', buyer_id, goods_name)
 
     def update_from_http_orders(self, shop_id: str, buyer_id: str, orders: list):
         """

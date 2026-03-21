@@ -113,28 +113,77 @@ class PddOrderCollector:
                     order.get('orderSn') or order.get('order_sn') or
                     order.get('sn') or order.get('orderNo') or ''
                 )
-                # 商品信息（可能是列表）
+                # 商品信息：优先从 orderGoodsList（latitude接口格式）提取，
+                # 其次从 goodsList（mangkhut接口格式）提取
+                order_goods_list = order.get('orderGoodsList') or []
                 goods_list = order.get('goodsList') or order.get('goods_list') or []
-                if goods_list and isinstance(goods_list, list):
+                if order_goods_list and isinstance(order_goods_list, list):
+                    first_goods = order_goods_list[0] if order_goods_list else {}
+                    goods_name = str(
+                        first_goods.get('goodsName') or first_goods.get('goods_name') or
+                        order.get('goodsName') or order.get('goods_name') or ''
+                    )
+                    goods_img = str(
+                        first_goods.get('goodsThumbUrl') or first_goods.get('thumbUrl') or
+                        first_goods.get('goods_img') or order.get('goodsThumbUrl') or
+                        order.get('goods_img') or ''
+                    )
+                    goods_id = str(
+                        first_goods.get('goodsId') or first_goods.get('goods_id') or
+                        order.get('goodsId') or order.get('goods_id') or ''
+                    )
+                    goods_count = sum(
+                        g.get('goodsCount', 1) or g.get('count', 1)
+                        for g in order_goods_list
+                    )
+                elif goods_list and isinstance(goods_list, list):
                     goods_name = goods_list[0].get('goodsName') or goods_list[0].get('name') or ''
+                    goods_img = str(goods_list[0].get('goodsThumbUrl') or goods_list[0].get('thumbUrl') or '')
+                    goods_id = str(goods_list[0].get('goodsId') or goods_list[0].get('goods_id') or '')
                     goods_count = sum(g.get('goodsCount', 1) or g.get('count', 1) for g in goods_list)
                 else:
                     goods_name = str(order.get('goodsName') or order.get('goods_name') or '')
+                    goods_img = str(order.get('goodsThumbUrl') or order.get('goods_img') or '')
+                    goods_id = str(order.get('goodsId') or order.get('goods_id') or '')
                     goods_count = int(order.get('goodsCount') or order.get('goods_count') or 1)
+
+                # 订单金额：latitude接口用 orderAmount（单位：分），兼容 payAmount
+                amount_raw = (
+                    order.get('orderAmount') or order.get('payAmount') or
+                    order.get('pay_amount') or 0
+                )
+                try:
+                    amount_int = int(amount_raw)
+                    # 金额 >= 10000 认为是分（fen），转换为元（yuan）
+                    pay_amount_yuan = f'{amount_int / 100:.2f}' if amount_int >= 10000 else f'{amount_int:.2f}'
+                except (ValueError, TypeError):
+                    amount_int = 0
+                    pay_amount_yuan = str(amount_raw)
+
+                # 订单状态（0 是有效状态"待付款"，用 is not None 判断）
+                status_int = order.get('orderStatus') if order.get('orderStatus') is not None else order.get('order_status')
+                status_text = ORDER_STATUS_MAP.get(int(status_int), str(status_int)) if status_int is not None else str(
+                    order.get('orderStatusStr') or order.get('status') or ''
+                )
 
                 normalized.append({
                     'order_sn': order_sn,
-                    'order_status': int(order.get('orderStatus') or order.get('order_status') or 0),
+                    'order_id': order_sn,
+                    'order_status': int(status_int) if status_int is not None else 0,
+                    'order_status_text': status_text,
                     'goods_name': goods_name,
+                    'goods_img': goods_img,
+                    'goods_id': goods_id,
                     'goods_count': goods_count,
                     'goods_price': int(order.get('goodsPrice') or order.get('goods_price') or 0),
-                    'pay_amount': int(order.get('payAmount') or order.get('pay_amount') or 0),
+                    'pay_amount': amount_int,
+                    'pay_amount_yuan': pay_amount_yuan,
                     'buyer_id': buyer_id,
                     'buyer_name': buyer_name,
                     'receiver_name': str(order.get('receiverName') or order.get('receiver_name') or ''),
                     'receiver_phone': str(order.get('receiverPhone') or order.get('receiver_phone') or ''),
                     'receiver_address': str(order.get('receiverAddress') or order.get('receiver_address') or ''),
-                    'created_time': order.get('createdTime') or order.get('created_time'),
+                    'created_time': order.get('createdAt') or order.get('createdTime') or order.get('created_time'),
                     'pay_time': order.get('payTime') or order.get('pay_time'),
                     'remark': str(order.get('remark') or ''),
                 })

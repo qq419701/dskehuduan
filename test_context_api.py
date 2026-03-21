@@ -88,6 +88,7 @@ all_results: dict = {
     "footprint_type1": {},
     "footprint_type2": {},
     "footprint_type3": {},
+    "ws_footprint": {},
     "diagnosis": {},
 }
 
@@ -433,6 +434,158 @@ async def _test_footprint(buyer_id: str, cookies: dict, fp_type: int) -> dict:
     return result_entry
 
 
+async def _test_ws_footprint(buyer_id: str, cookies: dict) -> dict:
+    """
+    步骤4：实时监听 WebSocket，验证 source_goods / bizContext 字段能被正确捕获。
+    重新打开浏览器，等待用户点击该买家会话，检测 WS 消息中的浏览足迹信息。
+    """
+    print()
+    print(_http("=== 测试4：实时WS捕获浏览足迹（source_goods / bizContext）==="))
+    print(_info("  该测试会重新打开浏览器，等待 WebSocket 消息以验证浏览足迹字段"))
+
+    result_entry: dict = {
+        "description": "实时WS捕获浏览足迹",
+        "buyer_id": buyer_id,
+        "source_goods_found": False,
+        "source_goods": None,
+        "biz_context_keys": None,
+        "ws_messages_seen": 0,
+        "error": None,
+    }
+
+    captured_goods: dict = {}
+    ws_count = [0]
+
+    def _handle_footprint_frame(raw: str) -> None:
+        try:
+            msg = json.loads(raw)
+        except Exception:
+            return
+        if not isinstance(msg, dict):
+            return
+
+        ws_count[0] += 1
+        inner = msg.get("message") or msg
+
+        # 检查 push_biz_context / bizContext 中的商品信息
+        for biz_key in ("push_biz_context", "bizContext", "biz_context"):
+            biz = inner.get(biz_key) or msg.get(biz_key)
+            if not isinstance(biz, dict):
+                continue
+            result_entry["biz_context_keys"] = list(biz.keys())
+            # 提取商品字段
+            goods_id = str(
+                biz.get("goods_id") or biz.get("goodsId") or
+                biz.get("sourceGoodsId") or ""
+            )
+            goods_name = str(
+                biz.get("goods_name") or biz.get("goodsName") or
+                biz.get("sourceGoodsName") or ""
+            )
+            goods_img = str(
+                biz.get("goods_img") or biz.get("goodsImg") or
+                biz.get("goodsImageUrl") or ""
+            )
+            # 从 sourceGoods 子对象提取
+            source_obj = biz.get("sourceGoods") or biz.get("source_goods") or {}
+            if isinstance(source_obj, dict):
+                goods_id = goods_id or str(source_obj.get("goodsId") or source_obj.get("goods_id") or "")
+                goods_name = goods_name or str(source_obj.get("goodsName") or source_obj.get("goods_name") or "")
+                goods_img = goods_img or str(source_obj.get("goodsImg") or source_obj.get("thumbUrl") or "")
+            if goods_id or goods_name:
+                captured_goods["goods_id"] = goods_id
+                captured_goods["goods_name"] = goods_name
+                captured_goods["goods_img"] = goods_img
+                print(_ok(f"  ✅ [{_ts()}] WS bizContext 中检测到浏览商品: id={goods_id} name={goods_name}"))
+
+        # 检查 source_goods 顶层字段（经 pdd_message 解析后的格式）
+        sg = inner.get("source_goods")
+        if isinstance(sg, dict) and (sg.get("goods_id") or sg.get("goods_name") or
+                                      sg.get("goodsId") or sg.get("goodsName")):
+            gid = str(sg.get("goods_id") or sg.get("goodsId") or "")
+            gname = str(sg.get("goods_name") or sg.get("goodsName") or "")
+            if not captured_goods.get("goods_name") and not captured_goods.get("goods_id"):
+                captured_goods["goods_id"] = gid
+                captured_goods["goods_name"] = gname
+                captured_goods["goods_img"] = str(sg.get("goods_img") or sg.get("goodsImg") or "")
+            print(_ok(f"  ✅ [{_ts()}] WS source_goods 字段检测到浏览商品: id={gid} name={gname}"))
+
+    try:
+        from playwright.async_api import async_playwright
+
+        candidate_profiles = []
+        browser_data_dir = BASE / "browser_data"
+        if browser_data_dir.exists():
+            for p in browser_data_dir.iterdir():
+                if p.is_dir():
+                    candidate_profiles.append(p)
+
+        user_data: Optional[Path] = None
+        for p in candidate_profiles:
+            if p.exists():
+                user_data = p
+                break
+
+        if user_data is None:
+            result_entry["error"] = "未找到 browser_data profile，跳过WS测试"
+            print(_warn(f"  {result_entry['error']}"))
+            return result_entry
+
+        async with async_playwright() as pw:
+            ctx2 = await pw.chromium.launch_persistent_context(
+                str(user_data),
+                headless=False,
+                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                locale="zh-CN",
+            )
+            page2 = ctx2.pages[0] if ctx2.pages else await ctx2.new_page()
+
+            def _on_ws2(ws) -> None:
+                url = ws.url
+                if "pinduoduo" not in url and "pdd" not in url.lower():
+                    return
+                ws.on("framesent", lambda f: _handle_footprint_frame(_get_ws_payload(f)))
+                ws.on("framereceived", lambda f: _handle_footprint_frame(_get_ws_payload(f)))
+
+            page2.on("websocket", _on_ws2)
+
+            try:
+                await page2.goto(
+                    "https://mms.pinduoduo.com/chat-merchant/index.html#/",
+                    timeout=30000,
+                )
+            except Exception:
+                pass
+
+            print()
+            print(_c("1;33", ">>> 请点击买家会话（查看是否能捕获到 source_goods / bizContext）<<<"))
+            print(_info("  最长等待 30 秒..."))
+
+            for i in range(6):
+                await asyncio.sleep(5)
+                if captured_goods.get("goods_name") or captured_goods.get("goods_id"):
+                    break
+                print(_info(f"  [{_ts()}] 等待WS消息... ({(i + 1) * 5}s)，已收到 {ws_count[0]} 条WS消息"))
+
+            await ctx2.close()
+
+        result_entry["ws_messages_seen"] = ws_count[0]
+        if captured_goods.get("goods_id") or captured_goods.get("goods_name"):
+            result_entry["source_goods_found"] = True
+            result_entry["source_goods"] = captured_goods
+            print(_ok(f"  ✅ WS浏览足迹捕获成功: {captured_goods}"))
+        else:
+            print(_warn(f"  ⚠️ 未从WS消息捕获到商品信息（共收到 {ws_count[0]} 条WS消息）"))
+            print(_info("  说明：浏览足迹只在买家正在浏览商品时才会出现在 bizContext 中"))
+            print(_info("  如果买家没有正在浏览的商品，source_goods 为空是正常的"))
+
+    except Exception as e:
+        result_entry["error"] = str(e)
+        print(_warn(f"  WS测试异常: {e}"))
+
+    return result_entry
+
+
 # ================================================================
 # 诊断报告
 # ================================================================
@@ -451,6 +604,7 @@ def _print_diagnosis(buyer_id: str, results: dict) -> dict:
         "order_fallback_field": None,
         "footprint_working_type": None,
         "footprint_goods_count": 0,
+        "ws_footprint_captured": False,
         "recommendations": [],
     }
 
@@ -534,6 +688,19 @@ def _print_diagnosis(buyer_id: str, results: dict) -> dict:
             "所有浏览足迹 type 值（1/2/3）均未返回商品数据，"
             "可能是 cookies 失效或接口参数有误"
         )
+
+    # WS实时浏览足迹
+    ws_fp = results.get("ws_footprint", {})
+    if ws_fp.get("source_goods_found"):
+        diag["ws_footprint_captured"] = True
+        sg = ws_fp.get("source_goods", {})
+        print(_ok(f"  WS浏览足迹捕获：✅ 成功，商品={sg.get('goods_name', '')}（id={sg.get('goods_id', '')}）"))
+    elif ws_fp.get("error"):
+        print(_warn(f"  WS浏览足迹捕获：⚠️ 出错（{ws_fp['error']}）"))
+    else:
+        ws_msgs = ws_fp.get("ws_messages_seen", 0)
+        print(_warn(f"  WS浏览足迹捕获：未捕获到商品（共收到 {ws_msgs} 条WS消息）"))
+        print(_info("    说明：source_goods 只在买家正在浏览商品时才会出现，空值为正常情况"))
 
     print(f"\n{_diag_line('【修复建议】')}")
     if diag["recommendations"]:
@@ -693,6 +860,7 @@ async def main() -> None:
     results["footprint_type1"] = await _test_footprint(buyer_id, cookies, 1)
     results["footprint_type2"] = await _test_footprint(buyer_id, cookies, 2)
     results["footprint_type3"] = await _test_footprint(buyer_id, cookies, 3)
+    results["ws_footprint"] = await _test_ws_footprint(buyer_id, cookies)
 
     # ---- 诊断报告 ----
     diagnosis = _print_diagnosis(buyer_id, results)

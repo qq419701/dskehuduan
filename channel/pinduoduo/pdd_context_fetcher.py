@@ -146,70 +146,19 @@ class PddContextFetcher:
 
     async def fetch_buyer_footprint(self, buyer_id: str, conversation_id: str = '') -> Optional[dict]:
         """
-        通过 latitude/goods/singleRecommendGoods 接口获取买家浏览足迹
-        返回最近浏览的商品信息（goods_id, goods_name, goods_img）
+        获取买家浏览足迹 - 从上下文缓存读取（WS实时捕获，不再主动拉取HTTP接口）
+        原 latitude/goods/singleRecommendGoods 接口不支持主动按uid查询，已废弃
         """
-        payload = {
-            'type': 2,
-            'uid': str(buyer_id),
-            'conversationId': conversation_id,
-            'pageSize': 5,
-            'pageNum': 1,
-        }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    PDD_RECOMMEND_GOODS_URL,
-                    json=payload,
-                    headers=self._build_headers(),
-                    timeout=aiohttp.ClientTimeout(total=8),
-                ) as resp:
-                    final_url = str(resp.url)
-                    if self._is_redirected(final_url):
-                        logger.warning('[fetcher] 浏览足迹接口被重定向（session过期）: %s', final_url)
-                        return None
-                    if resp.status != 200:
-                        return None
-                    try:
-                        data = await resp.json(content_type=None)
-                    except Exception as e:
-                        logger.debug('[fetcher] 浏览足迹接口响应非JSON: %s', e)
-                        return None
-            if not data.get('success'):
-                return None
-            result = data.get('result') or data.get('data') or {}
-            # singleRecommendGoods 接口返回的 result 是列表（每个元素含 goodsList/total）
-            if isinstance(result, list):
-                first = result[0] if result else {}
-                result = first if isinstance(first, dict) else {}
-            goods_list = result.get('goodsList') or result.get('list') or []
-            if not goods_list:
-                logger.warning('[fetcher] 买家 %s 浏览足迹接口返回success但商品列表为空！'
-                               'result完整结构: %s',
-                               buyer_id,
-                               json.dumps(result, ensure_ascii=False, indent=2)[:500])
-                return None
-            # 优先取有"历史浏览"标签的商品
-            footprint_goods = None
-            for g in goods_list:
-                tags = g.get('goodsTag') or {}
-                footprint_tags = tags.get('footprintTags') or []
-                for t in footprint_tags:
-                    if '浏览' in str(t.get('desc', '')):
-                        footprint_goods = g
-                        break
-                if footprint_goods:
-                    break
-            # 没有足迹标签，取第一个
-            target = footprint_goods or goods_list[0]
-            goods_id = str(target.get('goodsId') or target.get('goods_id') or '')
-            goods_name = str(target.get('goodsName') or target.get('goods_name') or '')
-            goods_img = str(target.get('goodsImageUrl') or target.get('thumbUrl') or target.get('goods_img') or '')
-            if goods_id or goods_name:
-                return {'goods_id': goods_id, 'goods_name': goods_name, 'goods_img': goods_img}
+            ctx_dict = self.context_manager.get_context(str(self.shop_id), str(buyer_id))
+            current_goods = ctx_dict.get('current_goods')
+            if current_goods and (current_goods.get('goods_id') or current_goods.get('goods_name')):
+                logger.debug('[fetcher] 买家 %s 从缓存获取到浏览足迹: %s',
+                             buyer_id, current_goods.get('goods_name', ''))
+                return current_goods
             return None
         except Exception as e:
-            logger.debug('[fetcher] 买家 %s 浏览足迹采集异常: %s', buyer_id, e)
+            logger.debug('[fetcher] 读取浏览足迹缓存失败: %s', e)
             return None
 
     async def fetch_buyer_orders(self, buyer_id: str) -> list:
@@ -247,6 +196,7 @@ class PddContextFetcher:
                                 if orders:
                                     logger.info('[fetcher] 买家 %s 解析到 %d 条订单（latitude）', buyer_id, len(orders))
                                     logger.debug('[fetcher] 买家 %s 首条订单字段: %s', buyer_id, list(orders[0].keys()) if orders[0] else [])
+                                    logger.debug('[fetcher] 买家 %s 首条订单 orderSn: %s', buyer_id, orders[0].get('orderSn', '') if orders[0] else '')
                                     return orders
                                 else:
                                     logger.warning('[fetcher] 买家 %s latitude接口返回success但订单列表为空！'
