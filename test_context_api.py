@@ -6,10 +6,11 @@
 用途：验证拼多多订单接口和浏览足迹接口是否正常工作
 
 使用方法：
-  python test_context_api.py                    # 自动捕获买家UID（需要打开浏览器点击会话）
-  python test_context_api.py --buyer-id 1234567 # 直接指定买家UID（需要先有有效cookies）
+  python test_context_api.py                                             # 自动捕获买家UID（需要打开浏览器点击会话）
+  python test_context_api.py --buyer-id 1234567                         # 指定buyer_id，浏览器加载后立即读cookies
+  python test_context_api.py --buyer-id 1234567 --cookies-file cks.json # 完全跳过浏览器，从文件读cookies
 
-输出文件：test_context_api_result.json（完整响应数据）
+输出文件：test_context_result.json（完整响应数据）
 
 前置条件：
   1. 已安装 playwright: pip install playwright && playwright install chromium
@@ -28,7 +29,7 @@ from typing import Optional
 
 # ── 常量 ──
 BASE = Path(__file__).parent
-OUTPUT_FILE = BASE / "test_context_api_result.json"
+OUTPUT_FILE = BASE / "test_context_result.json"
 
 PDD_ORDER_LATITUDE_URL = 'https://mms.pinduoduo.com/latitude/order/userAllOrder'
 PDD_ORDER_FALLBACK_URL = 'https://mms.pinduoduo.com/mangkhut/mms/recentOrderList'
@@ -141,13 +142,46 @@ async def _capture_buyer_id_and_cookies(user_data: Path) -> tuple:
 
     return captured_buyer_id, captured_cookies
 
+async def _load_cookies_from_browser(user_data: Path) -> dict:
+    """
+    打开浏览器 persistent context，加载拼多多页面，立即读取 cookies 后关闭浏览器。
+    不等待 WS 消息 / 不需要用户操作。
+    """
+    from playwright.async_api import async_playwright
+
+    cookies: dict = {}
+    async with async_playwright() as pw:
+        ctx = await pw.chromium.launch_persistent_context(
+            str(user_data),
+            headless=False,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+            locale="zh-CN",
+        )
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        try:
+            await page.goto('https://mms.pinduoduo.com/', timeout=15000)
+        except Exception:
+            pass
+        await asyncio.sleep(3)  # 3秒等待页面及 cookie 稳定
+        raw_cookies = await ctx.cookies()
+        cookies = {c['name']: c['value'] for c in raw_cookies if 'pinduoduo' in c.get('domain', '')}
+        print(ok(f"提取到 {len(cookies)} 个 pinduoduo cookies"))
+        await ctx.close()
+    return cookies
+
 async def test_order_latitude(buyer_id: str, cookies: dict) -> dict:
     """测试 latitude/order/userAllOrder 接口"""
     print(f"\n{info('='*50)}")
     print(info("测试1: latitude/order/userAllOrder（主订单接口）"))
     result = {'url': PDD_ORDER_LATITUDE_URL, 'success': False, 'orders': [], 'raw': None, 'error': None}
 
-    payload = {'uid': str(buyer_id), 'pageSize': 10, 'pageNum': 1}
+    payload = {
+        'uid': str(buyer_id),
+        'pageSize': 10,
+        'pageNum': 1,
+        'startTime': int(time.time()) - 90 * 86400,  # 近90天
+        'endTime': int(time.time()),
+    }
 
     try:
         import aiohttp
@@ -427,6 +461,7 @@ def print_diagnosis(buyer_id: str, results: dict):
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--buyer-id', default='', help='直接指定买家UID，跳过WS捕获')
+    parser.add_argument('--cookies-file', default='', help='从JSON文件加载cookies，完全跳过浏览器启动')
     args = parser.parse_args()
 
     print("="*60)
@@ -459,13 +494,42 @@ async def main():
 
     global captured_buyer_id, captured_cookies
 
-    if args.buyer_id:
+    if args.cookies_file:
+        # 从文件加载 cookies，完全跳过浏览器
+        cookies_path = Path(args.cookies_file)
+        if not cookies_path.exists():
+            print(err(f"❌ cookies 文件不存在: {cookies_path}"))
+            return
+        try:
+            raw = json.loads(cookies_path.read_text(encoding='utf-8'))
+            if isinstance(raw, list):
+                # playwright 格式：[{"name": ..., "value": ...}, ...]
+                captured_cookies = {c['name']: c['value'] for c in raw if 'name' in c and 'value' in c}
+            elif isinstance(raw, dict):
+                # 简单 key-value 格式
+                captured_cookies = raw
+            else:
+                print(err("❌ cookies 文件格式不支持（需要 dict 或 list）"))
+                return
+            print(ok(f"从文件加载到 {len(captured_cookies)} 个 cookies"))
+        except Exception as e:
+            print(err(f"❌ 读取 cookies 文件失败: {e}"))
+            return
+        if args.buyer_id:
+            captured_buyer_id = args.buyer_id
+        else:
+            print(warn("使用 --cookies-file 时请同时指定 --buyer-id"))
+            try:
+                uid = input("buyer_id: ").strip()
+                captured_buyer_id = uid or '0'
+            except (EOFError, KeyboardInterrupt):
+                captured_buyer_id = '0'
+    elif args.buyer_id:
         captured_buyer_id = args.buyer_id
         print(info(f"使用指定 buyer_id: {captured_buyer_id}"))
-        print(warn("注意：需要从浏览器提取 cookies，正在打开浏览器..."))
-        # 仍然需要打开浏览器提取 cookies
-        await _capture_buyer_id_and_cookies(user_data)
-        captured_buyer_id = args.buyer_id  # 恢复指定的 buyer_id
+        print(info("正在打开浏览器读取 cookies（无需操作，自动完成）..."))
+        # 直接读取 cookies，不进入 WS 等待循环
+        captured_cookies = await _load_cookies_from_browser(user_data)
     else:
         buyer_id, cookies = await _capture_buyer_id_and_cookies(user_data)
 
