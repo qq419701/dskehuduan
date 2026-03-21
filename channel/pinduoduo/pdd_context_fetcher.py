@@ -12,8 +12,10 @@ import config as cfg
 
 logger = logging.getLogger(__name__)
 
-# 拼多多商家后台买家订单接口（latitude 系列，聊天窗口实际使用）
+# 买家订单接口（latitude 聊天窗口接口，首选）
 PDD_ORDER_LIST_URL = 'https://mms.pinduoduo.com/latitude/order/userAllOrder'
+# 备用订单接口（mangkhut 后台接口，兜底）
+PDD_ORDER_LIST_FALLBACK_URL = 'https://mms.pinduoduo.com/mangkhut/mms/recentOrderList'
 # 买家浏览足迹接口（去掉错误的 /leopard/api 前缀）
 PDD_RECOMMEND_GOODS_URL = 'https://mms.pinduoduo.com/latitude/goods/singleRecommendGoods'
 
@@ -171,41 +173,87 @@ class PddContextFetcher:
 
     async def fetch_buyer_orders(self, buyer_id: str) -> list:
         """
-        通过 latitude/order/userAllOrder 接口采集指定买家的最近订单
-        使用 uid 参数过滤特定买家（新接口参数名从 buyerUid 改为 uid）
-        返回原始订单列表（不做标准化，由 pdd_context.update_from_http_orders 消费）
+        通过 HTTP API 采集指定买家的最近订单
+        首先尝试 latitude/order/userAllOrder 接口（聊天窗口实际接口），
+        失败时回退到 mangkhut/mms/recentOrderList 接口
         """
-        payload = {
-            'orderStatus': -1,
-            'uid': str(buyer_id),   # 新接口用 uid，不是 buyerUid
-            'pageNo': 1,
+        # 方法1：latitude/order/userAllOrder
+        payload_latitude = {
+            'uid': str(buyer_id),
             'pageSize': 10,
+            'pageNum': 1,
         }
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     PDD_ORDER_LIST_URL,
-                    json=payload,
+                    json=payload_latitude,
                     headers=self._build_headers(),
                     timeout=aiohttp.ClientTimeout(total=10),
-                    ssl=False,
+                ) as resp:
+                    if resp.status == 200:
+                        final_url = str(resp.url)
+                        if '/other/404' not in final_url and '__from=' not in final_url:
+                            try:
+                                data = await resp.json(content_type=None)
+                            except Exception:
+                                data = {}
+                            if data.get('success'):
+                                result = data.get('result') or data.get('data') or {}
+                                if isinstance(result, dict):
+                                    orders = result.get('orderList') or result.get('list') or result.get('orders') or []
+                                elif isinstance(result, list):
+                                    orders = result
+                                else:
+                                    orders = []
+                                if orders:
+                                    logger.info('买家 %s 通过latitude接口查到 %d 条订单', buyer_id, len(orders))
+                                    return orders
+                            else:
+                                err = data.get('error_msg') or data.get('errorMsg') or ''
+                                logger.debug('买家 %s latitude接口返回失败: %s，尝试兜底接口', buyer_id, err)
+        except Exception as e:
+            logger.debug('买家 %s latitude接口异常: %s，尝试兜底接口', buyer_id, e)
+
+        # 方法2（兜底）：mangkhut/mms/recentOrderList + buyerUid
+        now = int(time.time())
+        payload_fallback = {
+            'orderType': 0,
+            'afterSaleType': 0,
+            'remarkStatus': -1,
+            'urgeShippingStatus': -1,
+            'groupStartTime': now - 7 * 86400,
+            'groupEndTime': now,
+            'pageNumber': 1,
+            'pageSize': 10,
+            'hideRegionBlackDelayShipping': False,
+            'mobileMarkSearch': False,
+            'buyerUid': str(buyer_id),
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    PDD_ORDER_LIST_FALLBACK_URL,
+                    json=payload_fallback,
+                    headers=self._build_headers(),
+                    timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status != 200:
-                        logger.debug('买家 %s 订单查询返回 %d', buyer_id, resp.status)
+                        logger.debug('买家 %s 兜底订单查询返回 %d', buyer_id, resp.status)
                         return []
                     final_url = str(resp.url)
                     if '/other/404' in final_url or '__from=' in final_url:
-                        logger.warning('订单接口被重定向（session过期）: %s', final_url)
+                        logger.warning('兜底订单接口被重定向（session过期）: %s', final_url)
                         return []
                     try:
                         data = await resp.json(content_type=None)
                     except Exception as e:
-                        logger.debug('买家 %s 订单接口响应非JSON: %s', buyer_id, e)
+                        logger.debug('买家 %s 兜底接口响应非JSON: %s', buyer_id, e)
                         return []
 
             if not data.get('success'):
                 err = data.get('error_msg') or data.get('errorMsg') or ''
-                logger.debug('买家 %s 订单查询失败: %s', buyer_id, err)
+                logger.debug('买家 %s 兜底订单查询失败: %s', buyer_id, err)
                 return []
 
             result = data.get('result') or data.get('data') or {}
@@ -216,7 +264,7 @@ class PddContextFetcher:
             else:
                 orders = []
 
-            logger.info('买家 %s 查到 %d 条近期订单', buyer_id, len(orders))
+            logger.info('买家 %s 通过兜底接口查到 %d 条近7天订单', buyer_id, len(orders))
             return orders
 
         except Exception as e:
