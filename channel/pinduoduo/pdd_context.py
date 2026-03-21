@@ -127,7 +127,7 @@ class BuyerContextManager:
         latest = orders[0]
         order_sn = str(
             latest.get('orderSn') or latest.get('order_sn') or
-            latest.get('sn') or latest.get('id') or ''
+            latest.get('sn') or latest.get('orderNo') or latest.get('id') or ''
         )
         if order_sn and order_sn != ctx.order_sn:
             ctx.order_sn = order_sn
@@ -151,6 +151,9 @@ class BuyerContextManager:
     def update_footprint(self, shop_id: str, buyer_id: str, goods: dict):
         """从HTTP接口采集的浏览足迹更新上下文（WS直接数据优先级更高，不覆盖已有数据）"""
         ctx = self._get_ctx(shop_id, buyer_id)
+        # 已有 current_goods 时不覆盖（WS数据优先）
+        if ctx.current_goods and (ctx.current_goods.get('goods_id') or ctx.current_goods.get('goods_name')):
+            return
         if goods.get('goods_id') or goods.get('goods_name'):
             ctx.current_goods = {
                 'goods_id': str(goods.get('goods_id') or ''),

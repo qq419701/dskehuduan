@@ -111,7 +111,7 @@ class PddOrderCollector:
                 # 订单号
                 order_sn = str(
                     order.get('orderSn') or order.get('order_sn') or
-                    order.get('sn') or ''
+                    order.get('sn') or order.get('orderNo') or ''
                 )
                 # 商品信息（可能是列表）
                 goods_list = order.get('goodsList') or order.get('goods_list') or []

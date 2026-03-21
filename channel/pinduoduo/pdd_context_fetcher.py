@@ -92,6 +92,9 @@ class PddContextFetcher:
         last = self._last_query.get(buyer_id, 0)
         if now - last < self._query_cooldown:
             return False
+        if buyer_id in self._querying:
+            return False   # 正在采集中，跳过
+        self._querying.add(buyer_id)
         self._last_query[buyer_id] = now
         try:
             # 并发采集：订单 + 浏览足迹
@@ -119,6 +122,8 @@ class PddContextFetcher:
         except Exception as e:
             logger.debug('[fetcher] 买家 %s fetch_and_update 异常: %s', buyer_id, e)
             return False
+        finally:
+            self._querying.discard(buyer_id)
 
     async def fetch_buyer_footprint(self, buyer_id: str, conversation_id: str = '') -> Optional[dict]:
         """
@@ -140,10 +145,11 @@ class PddContextFetcher:
                     headers=self._build_headers(),
                     timeout=aiohttp.ClientTimeout(total=8),
                 ) as resp:
-                    if resp.status != 200:
-                        return None
-                    if self._is_redirected(str(resp.url)):
+                    final_url = str(resp.url)
+                    if self._is_redirected(final_url):
                         logger.warning('[fetcher] 浏览足迹接口被重定向（session过期）: %s', final_url)
+                        return None
+                    if resp.status != 200:
                         return None
                     try:
                         data = await resp.json(content_type=None)
