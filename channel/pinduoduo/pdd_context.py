@@ -129,10 +129,15 @@ class BuyerContextManager:
             latest.get('orderSn') or latest.get('order_sn') or
             latest.get('sn') or latest.get('orderNo') or latest.get('id') or ''
         )
+        # 总是更新 order_info（保证详情是最新的）
+        ctx.order_info = latest
         if order_sn and order_sn != ctx.order_sn:
             ctx.order_sn = order_sn
-            ctx.order_info = latest
-            logger.info('买家 %s 订单上下文已更新（HTTP采集）: %s', buyer_id, order_sn)
+            logger.info('买家 %s 订单号已更新（HTTP采集）: %s', buyer_id, order_sn)
+        elif order_sn:
+            logger.debug('买家 %s 订单详情已刷新（HTTP采集）: %s', buyer_id, order_sn)
+        else:
+            logger.debug('买家 %s 订单详情已刷新（HTTP采集，无订单号）', buyer_id)
 
     def get_context(self, shop_id: str, buyer_id: str) -> dict:
         """

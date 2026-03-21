@@ -181,12 +181,18 @@ class PddChannel(BaseChannel):
                     timeout=3.0
                 )
             except asyncio.TimeoutError:
-                logger.warning('买家 %s 订单采集超时（3s），使用缓存数据继续', buyer_id)
+                logger.warning('买家 %s 订单采集超时（3s），已加入后台队列继续采集', buyer_id)
+                self._ctx_fetcher.request_fetch(str(buyer_id), force=True)  # 加入后台队列重试
             except Exception as e:
                 logger.debug('买家 %s 订单采集异常: %s', buyer_id, e)
 
         # ── 步骤3：从上下文管理器获取最新上下文（合并订单+浏览足迹）──
         buyer_ctx = self._ctx_manager.get_context(str(self.shop_id), str(buyer_id))
+        logger.debug('买家 %s 当前上下文: order_sn=%s, has_order_info=%s, has_goods=%s',
+                     buyer_id,
+                     buyer_ctx.get('order_sn', ''),
+                     bool(buyer_ctx.get('order_info')),
+                     bool(buyer_ctx.get('current_goods')))
 
         # 补充 order_id（优先用消息自带的，其次用上下文缓存的）
         if not order_id:

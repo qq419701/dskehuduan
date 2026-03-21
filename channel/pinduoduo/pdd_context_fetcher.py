@@ -37,7 +37,7 @@ class PddContextFetcher:
         self._pending_buyers: set = set()   # 待查询的 buyer_id 队列
         self._querying: set = set()         # 正在查询中的 buyer_id
         self._last_query: dict = {}         # buyer_id -> 上次查询时间戳
-        self._query_cooldown = 120          # 同一买家120秒内不重复查询
+        self._query_cooldown = 30           # 同一买家30秒内不重复查询
         self._running = False
         self._task = None
 
@@ -62,40 +62,51 @@ class PddContextFetcher:
     @staticmethod
     def _extract_orders(data: dict) -> list:
         result = data.get('result') or data.get('data') or {}
-        if isinstance(result, dict):
-            return result.get('orderList') or result.get('list') or result.get('orders') or []
         if isinstance(result, list):
             return result
+        if isinstance(result, dict):
+            for field in ('orderList', 'list', 'orders', 'items', 'data', 'records'):
+                val = result.get(field)
+                if val and isinstance(val, list):
+                    return val
         return []
 
-    def request_fetch(self, buyer_id: str):
+    def request_fetch(self, buyer_id: str, force: bool = False):
         """
         请求异步采集某买家的订单（非阻塞）
         由 pdd_channel 在收到买家消息时调用
+        force=True 时跳过冷却期检查（如超时后强制重试）
         """
         buyer_id = str(buyer_id)
         now = time.time()
         last = self._last_query.get(buyer_id, 0)
-        if now - last < self._query_cooldown:
+        if not force and now - last < self._query_cooldown:
             return  # 冷却期内不重复查
         if buyer_id not in self._querying:
             self._pending_buyers.add(buyer_id)
 
     async def fetch_and_update(self, buyer_id: str) -> bool:
         """
-        立即并发采集买家订单和浏览足迹，更新上下文（带120秒冷却期）。
+        立即并发采集买家订单和浏览足迹，更新上下文（带30秒冷却期）。
         由 pdd_channel 在每条买家消息时直接 await 调用，确保 AI 回复前有上下文数据。
         返回 True 表示采集到了新数据，返回 False 表示处于冷却期或未采集到数据。
         """
         buyer_id = str(buyer_id)
         now = time.time()
         last = self._last_query.get(buyer_id, 0)
-        if now - last < self._query_cooldown:
-            return False
+
+        # 如果在冷却期内，但上下文没有订单数据，仍然采集
+        ctx = self.context_manager.get_context(self.shop_id, buyer_id)
+        has_order = bool(ctx.get('order_sn') or ctx.get('order_info'))
+
+        if now - last < self._query_cooldown and has_order:
+            return False  # 有订单数据且在冷却期，跳过
+
         if buyer_id in self._querying:
             return False   # 正在采集中，跳过
         self._querying.add(buyer_id)
         self._last_query[buyer_id] = now
+        logger.info('[fetcher] 买家 %s 开始采集（has_order=%s）', buyer_id, has_order)
         try:
             # 并发采集：订单 + 浏览足迹
             orders_task = asyncio.create_task(self.fetch_buyer_orders(buyer_id))
@@ -217,10 +228,17 @@ class PddContextFetcher:
                             except Exception:
                                 data = {}
                             if data.get('success'):
+                                result = data.get('result') or data.get('data') or {}
+                                logger.debug('买家 %s latitude接口 result 结构: keys=%s',
+                                             buyer_id, list(result.keys()) if isinstance(result, dict) else type(result).__name__)
                                 orders = self._extract_orders(data)
                                 if orders:
-                                    logger.info('买家 %s 通过latitude接口查到 %d 条订单', buyer_id, len(orders))
+                                    logger.info('[fetcher] 买家 %s 解析到 %d 条订单（latitude）', buyer_id, len(orders))
+                                    logger.debug('[fetcher] 买家 %s 首条订单字段: %s', buyer_id, list(orders[0].keys()) if orders[0] else [])
                                     return orders
+                                else:
+                                    logger.debug('[fetcher] 买家 %s latitude接口返回success但解析订单为空，result结构: %s',
+                                                 buyer_id, list(result.keys()) if isinstance(result, dict) else type(result).__name__)
                             else:
                                 err = data.get('error_msg') or data.get('errorMsg') or ''
                                 logger.debug('买家 %s latitude接口返回失败: %s，尝试兜底接口', buyer_id, err)
@@ -270,6 +288,13 @@ class PddContextFetcher:
 
             orders = self._extract_orders(data)
 
+            if orders:
+                logger.info('[fetcher] 买家 %s 解析到 %d 条订单（兜底接口）', buyer_id, len(orders))
+                logger.debug('[fetcher] 买家 %s 首条订单字段: %s', buyer_id, list(orders[0].keys()) if orders[0] else [])
+            else:
+                result = data.get('result') or data.get('data') or {}
+                logger.debug('[fetcher] 买家 %s 兜底接口订单解析为空，result结构: %s',
+                             buyer_id, list(result.keys()) if isinstance(result, dict) else type(result).__name__)
             logger.info('买家 %s 通过兜底接口查到 %d 条近7天订单', buyer_id, len(orders))
             return orders
 
