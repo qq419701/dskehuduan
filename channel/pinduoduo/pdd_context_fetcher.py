@@ -12,18 +12,19 @@ import config as cfg
 
 logger = logging.getLogger(__name__)
 
-# 拼多多商家后台订单列表接口
-PDD_ORDER_LIST_URL = 'https://mms.pinduoduo.com/mangkhut/mms/recentOrderList'
-# 买家浏览足迹接口
-PDD_RECOMMEND_GOODS_URL = 'https://mms.pinduoduo.com/leopard/api/latitude/goods/singleRecommendGoods'
+# 拼多多商家后台买家订单接口（latitude 系列，聊天窗口实际使用）
+PDD_ORDER_LIST_URL = 'https://mms.pinduoduo.com/latitude/order/userAllOrder'
+# 买家浏览足迹接口（去掉错误的 /leopard/api 前缀）
+PDD_RECOMMEND_GOODS_URL = 'https://mms.pinduoduo.com/latitude/goods/singleRecommendGoods'
 
 
 class PddContextFetcher:
     """
     主动通过 HTTP API 采集买家订单，补充到上下文管理器
     采集方式：
-    1. 通过 recentOrderList 接口，按 buyerUid 过滤最近订单（7天内）
-    2. 订单结果更新到 BuyerContextManager
+    1. 通过 latitude/order/userAllOrder 接口，按 uid 过滤最近订单
+    2. 通过 latitude/goods/singleRecommendGoods 接口获取浏览足迹
+    3. 结果更新到 BuyerContextManager
     """
 
     def __init__(self, shop_id, cookies: dict, context_manager, shop_token: str = ''):
@@ -106,7 +107,7 @@ class PddContextFetcher:
 
     async def fetch_buyer_footprint(self, buyer_id: str, conversation_id: str = '') -> Optional[dict]:
         """
-        通过 singleRecommendGoods 接口获取买家浏览足迹
+        通过 latitude/goods/singleRecommendGoods 接口获取买家浏览足迹
         返回最近浏览的商品信息（goods_id, goods_name, goods_img）
         """
         payload = {
@@ -126,7 +127,15 @@ class PddContextFetcher:
                 ) as resp:
                     if resp.status != 200:
                         return None
-                    data = await resp.json(content_type=None)
+                    final_url = str(resp.url)
+                    if '/other/404' in final_url or '__from=' in final_url:
+                        logger.warning('[fetcher] 浏览足迹接口被重定向（session过期）: %s', final_url)
+                        return None
+                    try:
+                        data = await resp.json(content_type=None)
+                    except Exception as e:
+                        logger.debug('[fetcher] 浏览足迹接口响应非JSON: %s', e)
+                        return None
             if not data.get('success'):
                 return None
             result = data.get('result') or data.get('data') or {}
@@ -158,23 +167,14 @@ class PddContextFetcher:
 
     async def fetch_buyer_orders(self, buyer_id: str) -> list:
         """
-        通过 HTTP API 采集指定买家的最近7天订单
-        使用 recentOrderList 接口，配合 buyerUid 参数过滤
-        返回标准化后的订单列表
+        通过 latitude/order/userAllOrder 接口采集指定买家的最近订单
+        使用 uid 参数过滤特定买家（新接口参数名从 buyerUid 改为 uid）
+        返回原始订单列表（不做标准化，由 pdd_context.update_from_http_orders 消费）
         """
-        now = int(time.time())
         payload = {
-            'orderType': 0,
-            'afterSaleType': 0,
-            'remarkStatus': -1,
-            'urgeShippingStatus': -1,
-            'groupStartTime': now - 7 * 86400,
-            'groupEndTime': now,
-            'pageNumber': 1,
+            'uid': str(buyer_id),   # 新接口用 uid，不是 buyerUid
+            'pageNum': 1,
             'pageSize': 10,
-            'hideRegionBlackDelayShipping': False,
-            'mobileMarkSearch': False,
-            'buyerUid': str(buyer_id),   # 关键：过滤特定买家
         }
         try:
             async with aiohttp.ClientSession() as session:
@@ -183,6 +183,7 @@ class PddContextFetcher:
                     json=payload,
                     headers=self._build_headers(),
                     timeout=aiohttp.ClientTimeout(total=10),
+                    ssl=False,
                 ) as resp:
                     if resp.status != 200:
                         logger.debug('买家 %s 订单查询返回 %d', buyer_id, resp.status)
@@ -210,7 +211,7 @@ class PddContextFetcher:
             else:
                 orders = []
 
-            logger.info('买家 %s 查到 %d 条近7天订单', buyer_id, len(orders))
+            logger.info('买家 %s 查到 %d 条近期订单', buyer_id, len(orders))
             return orders
 
         except Exception as e:
