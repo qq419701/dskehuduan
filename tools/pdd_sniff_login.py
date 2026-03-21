@@ -99,6 +99,29 @@ def _save_anti_content(anti: str):
     _save_pdd_config(cfg)
     logger.info("anti_content 已保存 -> pdd_config.json  长度:%d 前30字:%s...", len(anti), anti[:30])
 
+    # 同步写入 config.json（config.py get_anti_content 读这里）
+    try:
+        import config as _cfg
+        main_cfg_path = Path.home() / ".aikefu-client" / "config.json"
+        main_cfg = {}
+        if main_cfg_path.exists():
+            try:
+                main_cfg = json.loads(main_cfg_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        shop_ids = []
+        for s in main_cfg.get("active_shops", main_cfg.get("shops", [])):
+            sid = s.get("id") or s.get("shop_id")
+            if sid:
+                shop_ids.append(str(sid))
+        if not shop_ids:
+            shop_ids = ["1"]
+        for sid in shop_ids:
+            _cfg.save_anti_content(sid, anti)
+        logger.info("anti_content 同步写入 config.json shop_ids=%s ✅", shop_ids)
+    except Exception as e:
+        logger.warning("同步写入 config.json 失败（不影响主功能）: %s", e)
+
 
 def _extract_token_from_json(data: dict) -> str:
     return (
