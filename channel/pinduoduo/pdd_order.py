@@ -4,7 +4,8 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-ORDER_API_URL = 'https://mms.pinduoduo.com/mangkhut/mms/recentOrderList'
+# 拼多多商家后台全量订单接口（latitude 系列，与聊天窗口使用的接口一致）
+ORDER_API_URL = 'https://mms.pinduoduo.com/latitude/order/userAllOrder'
 ORDER_SYNC_INTERVAL = 300
 # 遭遇限流后的等待秒数
 ORDER_RATE_LIMIT_RETRY_WAIT = 60
@@ -38,22 +39,16 @@ class PddOrderCollector:
 
     async def fetch_orders(self, cookies, page=1, page_size=20, days=90):
         """
-        POST https://mms.pinduoduo.com/mangkhut/mms/recentOrderList
+        POST https://mms.pinduoduo.com/latitude/order/userAllOrder
         参数 days 控制查询时间范围，默认90天（全量），同步时传入7天
+        新接口使用 pageNum 代替 pageNumber，去掉旧接口特有的过滤字段
         """
         now = int(time.time())
-        # 根据 days 参数计算时间范围
         payload = {
-            'orderType': 0,
-            'afterSaleType': 0,
-            'remarkStatus': -1,
-            'urgeShippingStatus': -1,
-            'groupStartTime': now - days * 86400,
-            'groupEndTime': now,
-            'pageNumber': page,
+            'pageNum': page,
             'pageSize': page_size,
-            'hideRegionBlackDelayShipping': False,
-            'mobileMarkSearch': False,
+            'startTime': now - days * 86400,
+            'endTime': now,
         }
         try:
             async with aiohttp.ClientSession() as session:
@@ -67,7 +62,15 @@ class PddOrderCollector:
                     if resp.status != 200:
                         logger.warning('订单接口返回 %d', resp.status)
                         return []
-                    data = await resp.json(content_type=None)
+                    final_url = str(resp.url)
+                    if '/other/404' in final_url or '__from=' in final_url:
+                        logger.warning('订单接口被重定向（session可能过期）: %s', final_url)
+                        return []
+                    try:
+                        data = await resp.json(content_type=None)
+                    except Exception as e:
+                        logger.warning('订单接口响应非JSON: %s', e)
+                        return []
 
             if not data.get('success'):
                 err_msg = data.get('error_msg') or data.get('errorMsg') or ''
@@ -99,7 +102,7 @@ class PddOrderCollector:
                 # 买家信息
                 buyer_id = str(
                     order.get('buyerId') or order.get('buyer_id') or
-                    order.get('buyerUid') or ''
+                    order.get('buyerUid') or order.get('uid') or ''
                 )
                 buyer_name = str(
                     order.get('buyerNick') or order.get('buyer_name') or

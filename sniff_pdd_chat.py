@@ -62,7 +62,7 @@ _diag: dict[str, Any] = {
 }
 
 # ---------- 关键字 ----------
-_HTTP_KEYWORDS = ("order", "goods", "buyer", "product")
+_HTTP_KEYWORDS = ("order", "goods", "buyer", "product", "latitude")
 _WS_BIZ_KEYWORDS = (
     "push_biz_context", "bizContext",
     "source_goods", "sourceGoods",
@@ -90,7 +90,8 @@ async def _handle_response(response) -> None:
         return
 
     # 只处理订单相关和含关键字的接口
-    is_order_list = "recentOrderList" in url
+    is_order_list = ("userAllOrder" in url or "userUnfinishedOrder" in url
+                     or "recentOrderList" in url)
     is_keyword = any(k in url.lower() for k in _HTTP_KEYWORDS)
     if not (is_order_list or is_keyword):
         return
