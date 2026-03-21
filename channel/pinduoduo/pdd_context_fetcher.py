@@ -129,12 +129,12 @@ class PddContextFetcher:
             elif isinstance(orders, Exception):
                 logger.debug('[fetcher] 买家 %s 订单采集异常: %s', buyer_id, orders)
             if isinstance(footprint, dict) and footprint:
-                # 只有当上下文中没有 current_goods 时才用接口数据（WS直接数据优先级更高）
-                ctx = self.context_manager.get_context(self.shop_id, buyer_id)
-                if not ctx.get('current_goods'):
-                    self.context_manager.update_footprint(self.shop_id, buyer_id, footprint)
-                    logger.info('[fetcher] 买家 %s 浏览足迹采集成功: %s', buyer_id, footprint.get('goods_name', ''))
-                    updated = True
+                # 无论 WS 缓存是否有数据，HTTP 接口采集到的也更新。
+                # WS 缓存只在收到推送帧时写入，可能因买家不在浏览商品而为空或陈旧；
+                # HTTP 接口每次主动拉取最新数据，更能反映当前足迹。
+                self.context_manager.update_footprint(self.shop_id, buyer_id, footprint)
+                logger.info('[fetcher] 买家 %s 浏览足迹采集成功: %s', buyer_id, footprint.get('goods_name', ''))
+                updated = True
             elif isinstance(footprint, Exception):
                 logger.debug('[fetcher] 买家 %s 浏览足迹采集异常: %s', buyer_id, footprint)
             return updated
