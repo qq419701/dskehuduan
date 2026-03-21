@@ -125,6 +125,7 @@ class BuyerContextManager:
         ctx = self._get_ctx(shop_id, buyer_id)
         # 取第一条（最近的）
         latest = orders[0]
+        # 同时兼容驼峰和蛇形命名（接口实际返回驼峰字段）
         order_sn = str(
             latest.get('orderSn') or latest.get('order_sn') or
             latest.get('sn') or latest.get('orderNo') or latest.get('id') or ''
@@ -138,6 +139,23 @@ class BuyerContextManager:
             logger.debug('买家 %s 订单详情已刷新（HTTP采集）: %s', buyer_id, order_sn)
         else:
             logger.debug('买家 %s 订单详情已刷新（HTTP采集，无订单号）', buyer_id)
+
+        # 从订单商品列表更新浏览足迹（仅在WS缓存无数据时填充）
+        if not (ctx.current_goods and (ctx.current_goods.get('goods_id') or ctx.current_goods.get('goods_name'))):
+            goods_list = (latest.get('orderGoodsList') or latest.get('goods_list') or
+                          latest.get('goodsList') or [])
+            if goods_list and isinstance(goods_list[0], dict):
+                g = goods_list[0]
+                goods_name = g.get('goodsName') or g.get('goods_name') or ''
+                goods_id = str(g.get('goodsId') or g.get('goods_id') or '')
+                goods_img = str(g.get('goodsImageUrl') or g.get('thumbUrl') or g.get('goods_img') or '')
+                if goods_name or goods_id:
+                    ctx.current_goods = {
+                        'goods_id': goods_id,
+                        'goods_name': goods_name,
+                        'goods_img': goods_img,
+                    }
+                    logger.debug('买家 %s 商品信息已从订单提取（HTTP采集）: %s', buyer_id, goods_name)
 
     def get_context(self, shop_id: str, buyer_id: str) -> dict:
         """

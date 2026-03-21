@@ -67,9 +67,10 @@ class PddContextFetcher:
             return result
         if isinstance(result, dict):
             # 扩展字段列表，覆盖拼多多API可能使用的各种字段名
-            for field in ('orderList', 'list', 'orders', 'items', 'data', 'records',
+            # 注意：'orders' 排在 'list' 之前，因为 latitude/order/userAllOrder 实际返回 'orders' 字段
+            for field in ('orderList', 'orders', 'list', 'items', 'records',
                           'orderSnList', 'orderInfoList', 'orderVOList', 'orderDetailList',
-                          'content', 'rows', 'orderInfos'):
+                          'content', 'rows', 'orderInfos', 'data'):
                 val = result.get(field)
                 if val and isinstance(val, list):
                     return val
@@ -162,6 +163,8 @@ class PddContextFetcher:
         except Exception:
             pass
 
+        logger.debug('[fetcher] 买家 %s 浏览足迹仅从WS缓存读取（HTTP接口不支持按uid主动查询）', buyer_id)
+
         # 主动调用 HTTP 接口（type=1/2/3依次尝试）
         for fp_type in (1, 2, 3):
             payload = {
@@ -238,7 +241,7 @@ class PddContextFetcher:
             'uid': str(buyer_id),
             'pageSize': 10,
             'pageNum': 1,
-            'startTime': int(time.time()) - 90 * 86400,   # 90天范围
+            'startTime': int(time.time()) - 180 * 86400,   # 180天范围，覆盖更长时间的历史订单
             'endTime': int(time.time()),
         }
         try:
