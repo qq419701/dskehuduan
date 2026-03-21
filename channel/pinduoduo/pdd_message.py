@@ -59,15 +59,38 @@ def _extract_source_goods_from_biz(biz: dict) -> Optional[dict]:
     goods_img = str(biz.get('goods_img') or biz.get('goodsImg') or biz.get('sourceGoodsImg') or biz.get('goodsImageUrl') or '')
     goods_price = biz.get('goods_price') or biz.get('goodsPrice') or biz.get('minGroupPrice') or 0
 
-    # 补充：sourceGoods 是对象时展开
+    # 补充：sourceGoods / source_goods 是对象时展开
     source_obj = biz.get('sourceGoods') or biz.get('source_goods') or {}
     if isinstance(source_obj, dict) and source_obj:
         goods_id = goods_id or str(source_obj.get('goodsId') or source_obj.get('goods_id') or '')
         goods_name = goods_name or str(source_obj.get('goodsName') or source_obj.get('goods_name') or '')
-        goods_img = goods_img or str(source_obj.get('goodsImg') or source_obj.get('thumbUrl') or '')
+        goods_img = goods_img or str(source_obj.get('goodsImg') or source_obj.get('thumbUrl') or source_obj.get('mainImgUrl') or '')
         goods_price = goods_price or source_obj.get('minGroupPrice') or source_obj.get('price') or 0
 
+    # currentGoods / recommendGoods / linkGoods / goods 字段（某些WS格式）
+    for field in ('currentGoods', 'recommendGoods', 'linkGoods', 'goods'):
+        obj = biz.get(field)
+        if isinstance(obj, dict) and obj:
+            goods_id = goods_id or str(obj.get('goodsId') or obj.get('goods_id') or '')
+            goods_name = goods_name or str(obj.get('goodsName') or obj.get('goods_name') or '')
+            goods_img = goods_img or str(obj.get('goodsImg') or obj.get('thumbUrl') or obj.get('mainImgUrl') or obj.get('goodsImageUrl') or '')
+            goods_price = goods_price or obj.get('minGroupPrice') or obj.get('price') or 0
+            if goods_id or goods_name:
+                break
+
+    # 深层嵌套：context.sourceGoods
+    ctx_obj = biz.get('context')
+    if isinstance(ctx_obj, dict):
+        nested = ctx_obj.get('sourceGoods') or {}
+        if isinstance(nested, dict) and nested:
+            goods_id = goods_id or str(nested.get('goodsId') or nested.get('goods_id') or '')
+            goods_name = goods_name or str(nested.get('goodsName') or nested.get('goods_name') or '')
+            goods_img = goods_img or str(nested.get('goodsImg') or nested.get('thumbUrl') or nested.get('mainImgUrl') or '')
+            goods_price = goods_price or nested.get('minGroupPrice') or nested.get('price') or 0
+
     if goods_id or goods_name:
+        logger.debug('[biz] 提取到商品 id=%s name=%s，biz顶层keys=%s',
+                     goods_id, goods_name, list(biz.keys()))
         return {
             'goods_id': goods_id,
             'goods_name': goods_name,
@@ -93,8 +116,9 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
     raw_type = msg.get('type') or msg.get('msgType') or 0
     msg_type = MSG_TYPE_MAP.get(int(raw_type) if str(raw_type).isdigit() else 0, 'text')
 
-    # 从 push_biz_context 里获取更多信息
-    biz = msg.get('push_biz_context') or msg.get('bizContext') or {}
+    # 从 push_biz_context 里获取更多信息（尝试所有可能的字段名）
+    biz = (msg.get('push_biz_context') or msg.get('bizContext') or
+           msg.get('biz_context') or msg.get('pushBizContext') or {})
     msg_category = biz.get('msg_category') or biz.get('msgCategory') or 0
 
     content = ''
@@ -143,6 +167,20 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
     # 从biz上下文提取浏览足迹（买家进入会话时携带的商品信息）
     source_goods = _extract_source_goods_from_biz(biz)
 
+    # msg_category=4/5 是"买家进入会话"通知，不含用户文字但含商品上下文
+    # 这类消息在 content 为空时也应该传递浏览足迹
+    is_enter_session = int(msg_category) in (4, 5) or msg_type == 'system'
+
+    # 对进入会话消息，强制尝试所有可能的顶层字段路径
+    if is_enter_session and not source_goods:
+        for biz_key in ('push_biz_context', 'bizContext', 'biz_context', 'pushBizContext',
+                        'context', 'msgContext'):
+            alt_biz = msg.get(biz_key)
+            if isinstance(alt_biz, dict) and alt_biz:
+                source_goods = _extract_source_goods_from_biz(alt_biz)
+                if source_goods:
+                    break
+
     # 识别买家发送的拼多多商品链接
     if msg_type == 'text' and content and not source_goods:
         extracted = _extract_goods_from_url(content)
@@ -151,10 +189,6 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
             msg_type = 'goods'
             order_info = {'goods_id': extracted['goods_id'], 'goods_name': ''}
             content = f"[商品链接] {content}"
-
-    # msg_category=4/5 是"买家进入会话"通知，不含用户文字但含商品上下文
-    # 这类消息在 content 为空时也应该传递浏览足迹
-    is_enter_session = int(msg_category) in (4, 5) or msg_type == 'system'
 
     if not buyer_id and not content and not is_enter_session:
         return None

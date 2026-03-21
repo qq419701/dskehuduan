@@ -221,6 +221,14 @@ class PddChannel(BaseChannel):
             if goods_name or goods_id:
                 current_goods = {'goods_id': goods_id, 'goods_name': goods_name, 'goods_img': goods_img}
 
+        # 兜底：从消息文本内容中提取商品链接
+        if not current_goods and content and msg_type == 'text':
+            from channel.pinduoduo.pdd_message import _extract_goods_from_url
+            extracted = _extract_goods_from_url(content)
+            if extracted:
+                current_goods = extracted
+                logger.debug('买家 %s 从消息内容提取到商品链接: goods_id=%s', buyer_id, extracted.get('goods_id', ''))
+
         # 入库
         message_id = 0
         if self.db_client:
