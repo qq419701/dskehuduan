@@ -66,6 +66,8 @@ def _dump(obj: Any) -> str:
 PDD_ORDER_LATITUDE_URL = "https://mms.pinduoduo.com/latitude/order/userAllOrder"
 PDD_ORDER_FALLBACK_URL = "https://mms.pinduoduo.com/mangkhut/mms/recentOrderList"
 PDD_FOOTPRINT_URL = "https://mms.pinduoduo.com/latitude/goods/singleRecommendGoods"
+PDD_ORDER_PROXY_IM_URL = "https://mms.pinduoduo.com/proxy/im/customerService/recentOrderList"
+PDD_ORDER_PROXY_MANGKHUT_URL = "https://mms.pinduoduo.com/proxy/mangkhut/mms/order/queryByBuyer"
 
 # 用于检查 cookies 是否失效导致的重定向
 _REDIRECT_MARKERS = ("/other/404", "__from=")
@@ -90,6 +92,12 @@ all_results: dict = {
     "footprint_type3": {},
     "ws_footprint": {},
     "diagnosis": {},
+    # 模块A新增字段
+    "order_module_a": {},
+    # 模块B新增字段
+    "footprint_module_b": {},
+    # 模块D新增字段
+    "e2e_module_d": {},
 }
 
 
@@ -434,6 +442,346 @@ async def _test_footprint(buyer_id: str, cookies: dict, fp_type: int) -> dict:
     return result_entry
 
 
+async def _test_module_a_orders(buyer_id: str, cookies: dict) -> dict:
+    """
+    模块A：多参数组合订单接口测试（8种组合）
+    找出哪个参数组合能返回数据
+    """
+    print()
+    print(_c("1;34", "=" * 60))
+    print(_c("1;34", "  模块A：多参数组合订单接口测试"))
+    print(_c("1;34", "=" * 60))
+
+    import aiohttp
+    now = int(time.time())
+    module_results = {}
+
+    combos = [
+        # (名称, URL, payload)
+        ("latitude_uid_only", PDD_ORDER_LATITUDE_URL,
+         {"uid": str(buyer_id), "pageSize": 10, "pageNum": 1}),
+        ("latitude_uid_time", PDD_ORDER_LATITUDE_URL,
+         {"uid": str(buyer_id), "pageSize": 10, "pageNum": 1,
+          "startTime": now - 90 * 86400, "endTime": now}),
+        ("latitude_uid_full", PDD_ORDER_LATITUDE_URL,
+         {"uid": str(buyer_id), "pageSize": 10, "pageNum": 1,
+          "startTime": now - 90 * 86400, "endTime": now}),
+        ("latitude_buyerUserId", PDD_ORDER_LATITUDE_URL,
+         {"buyerUserId": str(buyer_id), "pageSize": 10, "pageNum": 1,
+          "startTime": now - 90 * 86400, "endTime": now}),
+        ("mangkhut_buyerUid", PDD_ORDER_FALLBACK_URL,
+         {"orderType": 0, "afterSaleType": 0, "remarkStatus": -1,
+          "urgeShippingStatus": -1, "groupStartTime": now - 90 * 86400,
+          "groupEndTime": now, "pageNumber": 1, "pageSize": 10,
+          "hideRegionBlackDelayShipping": False, "mobileMarkSearch": False,
+          "buyerUid": str(buyer_id)}),
+        ("mangkhut_buyerUserId", PDD_ORDER_FALLBACK_URL,
+         {"orderType": 0, "afterSaleType": 0, "remarkStatus": -1,
+          "urgeShippingStatus": -1, "groupStartTime": now - 90 * 86400,
+          "groupEndTime": now, "pageNumber": 1, "pageSize": 10,
+          "hideRegionBlackDelayShipping": False, "mobileMarkSearch": False,
+          "buyerUserId": str(buyer_id)}),
+        ("proxy_im_recentOrderList", PDD_ORDER_PROXY_IM_URL,
+         {"buyerUserId": str(buyer_id), "pageSize": 10, "pageNum": 1}),
+        ("proxy_mangkhut_queryByBuyer", PDD_ORDER_PROXY_MANGKHUT_URL,
+         {"buyerUserId": str(buyer_id), "pageSize": 10, "pageNum": 1,
+          "startTime": now - 90 * 86400, "endTime": now}),
+    ]
+
+    for combo_name, url, payload in combos:
+        print()
+        print(_http(f"--- 组合 [{combo_name}] URL={url.split('pinduoduo.com/')[-1]} ---"))
+        entry = {"url": url, "payload": payload, "status": None, "success": None,
+                 "result_keys": None, "found_field": None, "order_count": 0, "error": None}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url, json=payload, headers=_build_headers(cookies),
+                    timeout=aiohttp.ClientTimeout(total=12),
+                ) as resp:
+                    entry["status"] = resp.status
+                    final_url = str(resp.url)
+                    if _is_redirected(final_url):
+                        print(_warn(f"  ❌ 被重定向（session过期）"))
+                        entry["error"] = "redirected"
+                        module_results[combo_name] = entry
+                        continue
+                    print(_http(f"  HTTP状态: {resp.status}"))
+                    try:
+                        data = await resp.json(content_type=None)
+                    except Exception as e:
+                        print(_warn(f"  响应非JSON: {e}"))
+                        entry["error"] = f"JSON解析失败: {e}"
+                        module_results[combo_name] = entry
+                        continue
+
+            entry["success"] = data.get("success")
+            print(_http(f"  success={data.get('success')}"))
+            r = data.get("result") or data.get("data") or {}
+            if isinstance(r, dict):
+                entry["result_keys"] = list(r.keys())
+                print(_http(f"  result keys: {list(r.keys())}"))
+            elif isinstance(r, list):
+                entry["result_keys"] = f"(list,len={len(r)})"
+                print(_http(f"  result 是列表，长度={len(r)}"))
+            order_list, found_field = _find_order_list(r)
+            if order_list:
+                entry["found_field"] = found_field
+                entry["order_count"] = len(order_list)
+                first = order_list[0] if order_list else {}
+                print(_ok(f"  ✅ 找到订单！字段='{found_field}' 数量={len(order_list)}"))
+                if isinstance(first, dict):
+                    print(_ok(f"  首条订单字段: {list(first.keys())}"))
+            else:
+                print(_warn(f"  ❌ 未找到订单列表"))
+                if data.get("success") and isinstance(r, dict):
+                    print(_diag_line(f"  完整result（前400字符）:\n{json.dumps(r, ensure_ascii=False)[:400]}"))
+        except Exception as e:
+            entry["error"] = str(e)
+            print(_warn(f"  异常: {e}"))
+        module_results[combo_name] = entry
+
+    return module_results
+
+
+async def _test_module_b_footprint(buyer_id: str, cookies: dict) -> dict:
+    """
+    模块B：浏览足迹接口完整测试（type=0/1/2/3/4/5）
+    """
+    print()
+    print(_c("1;34", "=" * 60))
+    print(_c("1;34", "  模块B：浏览足迹接口完整测试（type=0~5）"))
+    print(_c("1;34", "=" * 60))
+
+    import aiohttp
+    module_results = {}
+
+    for fp_type in range(6):
+        payload = {
+            "type": fp_type,
+            "uid": str(buyer_id),
+            "conversationId": "",
+            "pageSize": 5,
+            "pageNum": 1,
+        }
+        print()
+        print(_http(f"--- 浏览足迹 type={fp_type} ---"))
+        entry = {"type": fp_type, "status": None, "success": None,
+                 "result_keys": None, "goods_count": 0, "first_goods_fields": None,
+                 "error": None, "raw_result_preview": None}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    PDD_FOOTPRINT_URL, json=payload, headers=_build_headers(cookies),
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    entry["status"] = resp.status
+                    final_url = str(resp.url)
+                    if _is_redirected(final_url):
+                        print(_warn(f"  ❌ 被重定向（session过期）"))
+                        entry["error"] = "redirected"
+                        module_results[f"type{fp_type}"] = entry
+                        continue
+                    print(_http(f"  HTTP状态: {resp.status}"))
+                    try:
+                        data = await resp.json(content_type=None)
+                    except Exception as e:
+                        print(_warn(f"  响应非JSON: {e}"))
+                        entry["error"] = f"JSON解析失败: {e}"
+                        module_results[f"type{fp_type}"] = entry
+                        continue
+
+            entry["success"] = data.get("success")
+            print(_http(f"  success={data.get('success')}"))
+            r = data.get("result") or data.get("data") or {}
+            entry["raw_result_preview"] = json.dumps(r, ensure_ascii=False)[:500]
+            if isinstance(r, list):
+                entry["result_keys"] = f"(list,len={len(r)})"
+                print(_http(f"  result 是列表，长度={len(r)}"))
+                first_item = r[0] if r else {}
+                if isinstance(first_item, dict):
+                    print(_http(f"  result[0] keys: {list(first_item.keys())}"))
+                    goods_list = first_item.get("goodsList") or first_item.get("list") or []
+                    if goods_list:
+                        entry["goods_count"] = len(goods_list)
+                        first_g = goods_list[0] if goods_list else {}
+                        entry["first_goods_fields"] = list(first_g.keys()) if isinstance(first_g, dict) else None
+                        print(_ok(f"  ✅ 找到商品列表！数量={len(goods_list)}，首条字段: {entry['first_goods_fields']}"))
+                    else:
+                        print(_warn(f"  ❌ result[0] 中 goodsList/list 为空"))
+                        print(_diag_line(f"  result[0]（前300字符）: {json.dumps(first_item, ensure_ascii=False)[:300]}"))
+            elif isinstance(r, dict):
+                entry["result_keys"] = list(r.keys())
+                print(_http(f"  result keys: {list(r.keys())}"))
+                goods_list = r.get("goodsList") or r.get("list") or []
+                if goods_list:
+                    entry["goods_count"] = len(goods_list)
+                    first_g = goods_list[0] if goods_list else {}
+                    entry["first_goods_fields"] = list(first_g.keys()) if isinstance(first_g, dict) else None
+                    print(_ok(f"  ✅ 找到商品列表！数量={len(goods_list)}，首条字段: {entry['first_goods_fields']}"))
+                else:
+                    print(_warn(f"  ❌ goodsList/list 为空"))
+                    print(_diag_line(f"  完整result（前500字符）: {json.dumps(r, ensure_ascii=False)[:500]}"))
+            else:
+                entry["result_keys"] = type(r).__name__
+                print(_http(f"  result 类型: {type(r).__name__}，预览: {str(r)[:200]}"))
+        except Exception as e:
+            entry["error"] = str(e)
+            print(_warn(f"  异常: {e}"))
+        module_results[f"type{fp_type}"] = entry
+
+    return module_results
+
+
+async def _test_module_d_e2e(buyer_id: str, cookies: dict) -> dict:
+    """
+    模块D：端到端验证
+    模拟 pdd_context_fetcher.py 的实际运行路径，验证采集数据能否到达 aikefu 服务端
+    """
+    print()
+    print(_c("1;34", "=" * 60))
+    print(_c("1;34", "  模块D：端到端验证"))
+    print(_c("1;34", "=" * 60))
+
+    import aiohttp
+    entry = {
+        "buyer_id": buyer_id,
+        "order_fetch_success": False,
+        "order_count": 0,
+        "footprint_fetch_success": False,
+        "footprint_goods_name": None,
+        "aikefu_push_attempted": False,
+        "aikefu_push_success": None,
+        "aikefu_endpoint": None,
+        "error": None,
+    }
+
+    # 步骤1：模拟 fetch_buyer_orders() - 用与 pdd_context_fetcher 相同的参数
+    print()
+    print(_info("步骤D-1: 模拟 fetch_buyer_orders()（latitude接口，带时间参数）"))
+    now = int(time.time())
+    order_payload = {
+        "uid": str(buyer_id),
+        "pageSize": 10,
+        "pageNum": 1,
+        "startTime": now - 90 * 86400,
+        "endTime": now,
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                PDD_ORDER_LATITUDE_URL, json=order_payload,
+                headers=_build_headers(cookies),
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    if data.get("success"):
+                        r = data.get("result") or data.get("data") or {}
+                        order_list, field = _find_order_list(r)
+                        if order_list:
+                            entry["order_fetch_success"] = True
+                            entry["order_count"] = len(order_list)
+                            print(_ok(f"  ✅ 订单采集成功，字段='{field}'，数量={len(order_list)}"))
+                            first = order_list[0] if order_list else {}
+                            order_sn = (first.get("orderSn") or first.get("order_sn") or
+                                        first.get("sn") or first.get("orderNo") or "")
+                            print(_ok(f"  首条订单号: {order_sn}"))
+                        else:
+                            print(_warn(f"  ⚠️ 订单接口success但列表为空，result keys={list(r.keys()) if isinstance(r, dict) else type(r).__name__}"))
+                    else:
+                        err = data.get("error_msg") or data.get("errorMsg") or ""
+                        print(_warn(f"  ❌ 订单接口失败: {err}"))
+    except Exception as e:
+        entry["error"] = str(e)
+        print(_warn(f"  订单采集异常: {e}"))
+
+    # 步骤2：模拟 fetch_buyer_footprint() - 先检查WS缓存，再尝试HTTP type=1/2/3
+    print()
+    print(_info("步骤D-2: 模拟 fetch_buyer_footprint()（HTTP接口 type=1/2/3）"))
+    for fp_type in (1, 2, 3):
+        fp_payload = {
+            "type": fp_type, "uid": str(buyer_id),
+            "conversationId": "", "pageSize": 5, "pageNum": 1,
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    PDD_FOOTPRINT_URL, json=fp_payload,
+                    headers=_build_headers(cookies),
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        if data.get("success"):
+                            r = data.get("result") or data.get("data") or {}
+                            if isinstance(r, list):
+                                r = r[0] if r else {}
+                            goods_list = r.get("goodsList") or r.get("list") or []
+                            if goods_list:
+                                target = goods_list[0]
+                                goods_name = str(target.get("goodsName") or target.get("goods_name") or "")
+                                goods_id = str(target.get("goodsId") or target.get("goods_id") or "")
+                                if goods_id or goods_name:
+                                    entry["footprint_fetch_success"] = True
+                                    entry["footprint_goods_name"] = goods_name
+                                    print(_ok(f"  ✅ 浏览足迹采集成功 (type={fp_type}): {goods_name}"))
+                                    break
+                        else:
+                            print(_info(f"  type={fp_type}: success=False，跳过"))
+        except Exception as e:
+            print(_info(f"  type={fp_type} 异常: {e}"))
+    if not entry["footprint_fetch_success"]:
+        print(_warn("  ⚠️ HTTP接口未获取到浏览足迹（可能需要WS实时捕获）"))
+
+    # 步骤3：读取 config 获取 aikefu 服务端地址（如有）
+    print()
+    print(_info("步骤D-3: 检查 aikefu 服务端配置（模拟推送）"))
+    aikefu_url = None
+    try:
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent))
+        import config as cfg
+        aikefu_base = (getattr(cfg, "AIKEFU_BASE_URL", None) or
+                       getattr(cfg, "SERVER_BASE_URL", None) or
+                       getattr(cfg, "API_BASE_URL", None))
+        if aikefu_base:
+            aikefu_url = aikefu_base.rstrip("/") + "/api/webhook/pdd"
+            entry["aikefu_endpoint"] = aikefu_url
+            print(_info(f"  aikefu 服务端地址: {aikefu_url}"))
+        else:
+            print(_warn("  未找到 aikefu 服务端地址配置（AIKEFU_BASE_URL/SERVER_BASE_URL/API_BASE_URL）"))
+    except Exception as e:
+        print(_warn(f"  读取 config 失败: {e}"))
+
+    if aikefu_url and entry["order_count"] > 0:
+        print(_info(f"  正在向 {aikefu_url} 发送测试请求..."))
+        entry["aikefu_push_attempted"] = True
+        test_payload = {
+            "buyer_id": buyer_id,
+            "buyer_name": "测试买家",
+            "content": "我的订单在哪里",
+            "msg_type": "text",
+            "order_id": "",
+            "shop_token": "",
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    aikefu_url, json=test_payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    data = await resp.json(content_type=None)
+                    entry["aikefu_push_success"] = data.get("success", False)
+                    print(_ok(f"  ✅ 推送结果: success={data.get('success')} reply={str(data.get('reply', ''))[:50]}"))
+        except Exception as e:
+            print(_warn(f"  推送异常（正常，需要有效shop_token）: {e}"))
+
+    return entry
+
+
+
 async def _test_ws_footprint(buyer_id: str, cookies: dict) -> dict:
     """
     步骤4：实时监听 WebSocket，验证 source_goods / bizContext 字段能被正确捕获。
@@ -661,9 +1009,22 @@ def _print_diagnosis(buyer_id: str, results: dict) -> dict:
             f"需要在 _extract_orders() 中添加对应字段"
         )
 
-    # 浏览足迹
+    # 浏览足迹（综合模块B的所有type=0~5和原type=1/2/3）
     best_type = None
     best_count = 0
+    # 先检查 module_b（type=0~5）
+    mod_b = results.get("footprint_module_b", {})
+    for tp_str, fp in mod_b.items():
+        if not isinstance(fp, dict):
+            continue
+        cnt = fp.get("goods_count", 0)
+        if cnt > best_count:
+            best_count = cnt
+            try:
+                best_type = int(tp_str.replace("type", ""))
+            except Exception:
+                pass
+    # 再检查原type=1/2/3
     for tp in (1, 2, 3):
         key = f"footprint_type{tp}"
         fp = results.get(key, {})
@@ -675,19 +1036,64 @@ def _print_diagnosis(buyer_id: str, results: dict) -> dict:
         print(_ok(f"  浏览足迹 type={tp}：{status} goods_count={cnt}") if cnt > 0
               else _warn(f"  浏览足迹 type={tp}：{status} goods_count={cnt}"))
 
+    # 打印模块B额外的type（0,4,5）
+    for tp in (0, 4, 5):
+        key = f"type{tp}"
+        fp = mod_b.get(key, {})
+        cnt = fp.get("goods_count", 0)
+        status = "✅" if cnt > 0 else "❌"
+        print(_ok(f"  浏览足迹 type={tp}（模块B）：{status} goods_count={cnt}") if cnt > 0
+              else _warn(f"  浏览足迹 type={tp}（模块B）：{status} goods_count={cnt}"))
+
     if best_type is not None and best_count > 0:
         diag["footprint_working_type"] = best_type
         diag["footprint_goods_count"] = best_count
-        if best_type != 2:
-            diag["recommendations"].append(
-                f"浏览足迹接口 type 参数应改为 {best_type}（当前代码用的是 2），"
-                f"修改 pdd_context_fetcher.py fetch_buyer_footprint() 中 payload 的 'type' 值为 {best_type}"
-            )
+        diag["recommendations"].append(
+            f"浏览足迹接口 type={best_type} 有效（返回 {best_count} 个商品），"
+            f"pdd_context_fetcher.py 已按照 type=1/2/3 顺序尝试"
+        )
     else:
         diag["recommendations"].append(
-            "所有浏览足迹 type 值（1/2/3）均未返回商品数据，"
-            "可能是 cookies 失效或接口参数有误"
+            "所有浏览足迹 type 值（0~5）均未返回商品数据，"
+            "说明该接口需要买家正在浏览商品时才有效，应主要依赖WS实时捕获"
         )
+
+    # 模块A订单参数组合诊断
+    mod_a = results.get("order_module_a", {})
+    if mod_a:
+        print()
+        print(_info("  【模块A订单接口组合诊断】"))
+        working_combos = []
+        for combo_name, entry in mod_a.items():
+            if isinstance(entry, dict) and entry.get("order_count", 0) > 0:
+                working_combos.append((combo_name, entry["found_field"], entry["order_count"]))
+                print(_ok(f"  ✅ {combo_name}: 字段='{entry['found_field']}' 数量={entry['order_count']}"))
+            elif isinstance(entry, dict):
+                err = entry.get("error") or (
+                    "失败" if not entry.get("success") else "列表为空"
+                )
+                print(_warn(f"  ❌ {combo_name}: {err}"))
+        if working_combos:
+            best_combo = working_combos[0]
+            diag["recommendations"].append(
+                f"有效订单接口组合: {best_combo[0]}（字段='{best_combo[1]}'，"
+                f"数量={best_combo[2]}），pdd_context_fetcher.py 已使用 uid+startTime+endTime"
+            )
+        diag["order_module_a_working"] = working_combos
+
+    # 端到端验证结果
+    e2e = results.get("e2e_module_d", {})
+    if e2e:
+        print()
+        print(_info("  【端到端验证结果（模块D）】"))
+        if e2e.get("order_fetch_success"):
+            print(_ok(f"  ✅ 订单采集成功，数量={e2e.get('order_count', 0)}"))
+        else:
+            print(_warn("  ❌ 订单采集失败"))
+        if e2e.get("footprint_fetch_success"):
+            print(_ok(f"  ✅ 浏览足迹采集成功: {e2e.get('footprint_goods_name', '')}"))
+        else:
+            print(_warn("  ⚠️ 浏览足迹HTTP接口未获取到数据（依赖WS实时捕获）"))
 
     # WS实时浏览足迹
     ws_fp = results.get("ws_footprint", {})
@@ -860,6 +1266,13 @@ async def main() -> None:
     results["footprint_type1"] = await _test_footprint(buyer_id, cookies, 1)
     results["footprint_type2"] = await _test_footprint(buyer_id, cookies, 2)
     results["footprint_type3"] = await _test_footprint(buyer_id, cookies, 3)
+    # 模块A：多参数组合订单接口测试
+    results["order_module_a"] = await _test_module_a_orders(buyer_id, cookies)
+    # 模块B：浏览足迹type=0~5完整测试
+    results["footprint_module_b"] = await _test_module_b_footprint(buyer_id, cookies)
+    # 模块D：端到端验证
+    results["e2e_module_d"] = await _test_module_d_e2e(buyer_id, cookies)
+    # 模块C：WS实时浏览足迹捕获（最后执行，需要用户交互）
     results["ws_footprint"] = await _test_ws_footprint(buyer_id, cookies)
 
     # ---- 诊断报告 ----
