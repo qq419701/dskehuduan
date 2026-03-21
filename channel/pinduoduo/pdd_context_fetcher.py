@@ -95,15 +95,19 @@ class PddContextFetcher:
         now = time.time()
         last = self._last_query.get(buyer_id, 0)
 
-        # 如果在冷却期内，但上下文没有订单数据，仍然采集
-        ctx = self.context_manager.get_context(self.shop_id, buyer_id)
-        has_order = bool(ctx.get('order_sn') or ctx.get('order_info'))
-
-        if now - last < self._query_cooldown and has_order:
-            return False  # 有订单数据且在冷却期，跳过
-
         if buyer_id in self._querying:
             return False   # 正在采集中，跳过
+
+        # 如果在冷却期内，但上下文没有订单数据，仍然采集
+        in_cooldown = now - last < self._query_cooldown
+        if in_cooldown:
+            ctx = self.context_manager.get_context(self.shop_id, buyer_id)
+            has_order = bool(ctx.get('order_sn') or ctx.get('order_info'))
+            if has_order:
+                return False  # 有订单数据且在冷却期，跳过
+        else:
+            has_order = False  # 冷却期已过，直接采集
+
         self._querying.add(buyer_id)
         self._last_query[buyer_id] = now
         logger.info('[fetcher] 买家 %s 开始采集（has_order=%s）', buyer_id, has_order)
@@ -295,7 +299,6 @@ class PddContextFetcher:
                 result = data.get('result') or data.get('data') or {}
                 logger.debug('[fetcher] 买家 %s 兜底接口订单解析为空，result结构: %s',
                              buyer_id, list(result.keys()) if isinstance(result, dict) else type(result).__name__)
-            logger.info('买家 %s 通过兜底接口查到 %d 条近7天订单', buyer_id, len(orders))
             return orders
 
         except Exception as e:
