@@ -130,6 +130,11 @@ class PddChannel(BaseChannel):
             self._ctx_manager.update_from_message(str(self.shop_id), str(buyer_id), parsed)
             if source_goods:
                 logger.info('店铺 %s 买家 %s 浏览足迹已捕获: %s', self.shop_id, buyer_id, source_goods.get('goods_name',''))
+            elif parsed.get('source_page') == 'goods_detail':
+                logger.info('店铺 %s 买家 %s 来自商品详情页（无goods_id），source_page=%s',
+                            self.shop_id, buyer_id, parsed.get('source_page'))
+            else:
+                logger.debug('店铺 %s 买家 %s is_enter_session=True 但未获取到浏览足迹', self.shop_id, buyer_id)
             # 无内容或系统注入文字（来自商品详情页通知）：不发给AI
             if not content or parsed.get('from_goods_detail'):
                 return
@@ -293,6 +298,7 @@ class PddChannel(BaseChannel):
                         current_goods=current_goods,
                         order_info=order_info if order_info else None,
                         from_goods_detail=buyer_ctx.get('from_goods_detail', False),
+                        source_page=buyer_ctx.get('source_page', ''),
                     )
                 )
             else:
@@ -305,6 +311,7 @@ class PddChannel(BaseChannel):
                         current_goods=current_goods,
                         order_info=order_info if order_info else None,
                         from_goods_detail=buyer_ctx.get('from_goods_detail', False),
+                        source_page=buyer_ctx.get('source_page', ''),
                     )
                 )
         except Exception as e:
