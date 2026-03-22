@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 拼多多 WebSocket 消息解析
 支持：文字、图片、撤回、商品卡片、订单卡片
@@ -11,56 +11,26 @@ from urllib.parse import urlparse, parse_qs
 
 logger = logging.getLogger(__name__)
 
-# 商品名称模板（当只有goods_id时使用，确保goods_name非空以便服务端能注入上下文）
-_GOODS_NAME_TEMPLATE = '商品(ID:{goods_id})'
-# 系统注入的"来自商品详情页"通知文字标识
-_GOODS_DETAIL_PAGE_MARKERS = (
-    '当前用户来自 商品详情页', '来自商品详情页', '来自 商品详情页',
-    '[当前用户来自', 'from goods detail', 'source=goodsdetail',
-    '商品详情页进入',
-)
-# 宽泛 goods_id 参数匹配（[?&]goods_id=数字，在 & 前停止）
-_GOODS_ID_PARAM_RE = re.compile(r'[?&]goods_id=(\d+)')
-# 拼多多域名匹配前缀（统一维护）
-_PDD_DOMAIN_PREFIX = (
-    r'https?://(?:mobile\.yangkeduo\.com|mobile\.pinduoduo\.com|yangkeduo\.com'
-    r'|p\.pinduoduo\.com|yangkeduo\.com\.cn)'
-)
-
 def _extract_goods_from_url(text: str) -> Optional[dict]:
-    """从拼多多商品URL提取goods_id，同时保留完整URL"""
+    """从拼多多商品URL提取goods_id"""
     goods_id = None
-    goods_url = ''
-    # 提取完整URL（保留原始链接含参数）
-    url_m = re.search(_PDD_DOMAIN_PREFIX + r'[^\s]*', text)
-    if url_m:
-        goods_url = url_m.group(0)
-
-    # 改进正则：支持 ?goods_id=xxx 和 &goods_id=xxx 两种形式，兼容 & 后有其他参数
+    # 匹配 yangkeduo.com 或 mobile.pinduoduo.com 的商品链接
     pattern = (
-        _PDD_DOMAIN_PREFIX
-        + r'(?:/goods(?:\.html|/detail|/share)[^\s]*?)?'
-        + r'[?&]goods_id=(\d+)'
+        r'https?://(?:mobile\.yangkeduo\.com|mobile\.pinduoduo\.com|yangkeduo\.com)\n        r'/goods(?:\.html|/detail)[^\s]*goods_id=(\d+)[^\s]*'
     )
     m = re.search(pattern, text)
     if m:
         goods_id = m.group(1)
     elif 'yangkeduo' in text or 'pinduoduo' in text:
-        # 宽泛匹配：只要 URL 含拼多多域名且包含 goods_id 参数
-        m2 = _GOODS_ID_PARAM_RE.search(text)
+        m2 = re.search(r'goods_id=(\d+)', text)
         if m2:
             goods_id = m2.group(1)
-        if not goods_url:
-            url_m2 = re.search(r'https?://\S+', text)
-            if url_m2:
-                goods_url = url_m2.group(0)
 
     if goods_id:
         return {
             'goods_id': goods_id,
-            'goods_name': _GOODS_NAME_TEMPLATE.format(goods_id=goods_id),   # 非空，确保服务端能注入上下文
+            'goods_name': '',
             'goods_img': '',
-            'goods_url': goods_url,                  # 完整商品链接
         }
     return None
 
@@ -71,6 +41,11 @@ MSG_TYPE_MAP = {
     8: 'system', 9: 'custom', 10: 'withdraw',
 }
 
+# 非聊天消息的 cmd/type 字符串值，遇到直接忽略
+_NON_MSG_TYPES = frozenset({
+    'request', 'response', 'push', 'notify', 'ping', 'pong',
+    'ack', 'auth', 'heartbeat', 'connect', 'disconnect',
+})
 
 def parse_message(data: dict) -> Optional[dict]:
     if 'message' in data:
@@ -87,7 +62,6 @@ def _extract_source_goods_from_biz(biz: dict) -> Optional[dict]:
     goods_img = str(biz.get('goods_img') or biz.get('goodsImg') or biz.get('sourceGoodsImg') or biz.get('goodsImageUrl') or '')
     goods_price = biz.get('goods_price') or biz.get('goodsPrice') or biz.get('minGroupPrice') or 0
 
-    # 补充：sourceGoods / source_goods 是对象时展开
     source_obj = biz.get('sourceGoods') or biz.get('source_goods') or {}
     if isinstance(source_obj, dict) and source_obj:
         goods_id = goods_id or str(source_obj.get('goodsId') or source_obj.get('goods_id') or '')
@@ -95,18 +69,16 @@ def _extract_source_goods_from_biz(biz: dict) -> Optional[dict]:
         goods_img = goods_img or str(source_obj.get('goodsImg') or source_obj.get('thumbUrl') or source_obj.get('mainImgUrl') or '')
         goods_price = goods_price or source_obj.get('minGroupPrice') or source_obj.get('price') or 0
 
-    # currentGoods / recommendGoods / linkGoods / goods 字段（某些WS格式）
     for field in ('currentGoods', 'recommendGoods', 'linkGoods', 'goods'):
         obj = biz.get(field)
         if isinstance(obj, dict) and obj:
             goods_id = goods_id or str(obj.get('goodsId') or obj.get('goods_id') or '')
             goods_name = goods_name or str(obj.get('goodsName') or obj.get('goods_name') or '')
-            goods_img = goods_img or str(obj.get('goodsImg') or obj.get('thumbUrl') or obj.get('mainImgUrl') or obj.get('goodsImageUrl') or '')
+            goods_img = goods_img or str(obj.get('goodsImg') or obj.get('thumbUrl') or obj.get('mainImgUrl') or '')
             goods_price = goods_price or obj.get('minGroupPrice') or obj.get('price') or 0
             if goods_id or goods_name:
                 break
 
-    # 深层嵌套：context.sourceGoods
     ctx_obj = biz.get('context')
     if isinstance(ctx_obj, dict):
         nested = ctx_obj.get('sourceGoods') or {}
@@ -140,11 +112,9 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
     msg_id = str(msg.get('msg_id') or msg.get('msgId') or '')
     timestamp = msg.get('timestamp') or msg.get('createTime') or 0
 
-    # 判断消息类型
     raw_type = msg.get('type') or msg.get('msgType') or 0
     msg_type = MSG_TYPE_MAP.get(int(raw_type) if str(raw_type).isdigit() else 0, 'text')
 
-    # 从 push_biz_context 里获取更多信息（尝试所有可能的字段名）
     biz = (msg.get('push_biz_context') or msg.get('bizContext') or
            msg.get('biz_context') or msg.get('pushBizContext') or {})
     msg_category = biz.get('msg_category') or biz.get('msgCategory') or 0
@@ -154,10 +124,8 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
     order_id = ''
     order_info = {}
 
-    # 解析内容
     raw_content = msg.get('content') or msg.get('msgContent') or ''
 
-    # 尝试解析JSON内容（商品卡片、订单卡片等）
     if isinstance(raw_content, str) and raw_content.startswith('{'):
         try:
             content_obj = json.loads(raw_content)
@@ -181,25 +149,19 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
     elif isinstance(raw_content, str):
         content = raw_content
 
-    # 特殊处理
     if msg_type == 'image' and not image_url:
         image_url = msg.get('imageUrl') or msg.get('url') or ''
         content = '[图片]'
     elif msg_type == 'withdraw':
         content = '[消息已撤回]'
 
-    # 从biz上下文补充订单信息
     if not order_id:
         order_id = str(biz.get('order_sn') or biz.get('orderSn') or biz.get('order_id') or '')
 
-    # 从biz上下文提取浏览足迹（买家进入会话时携带的商品信息）
     source_goods = _extract_source_goods_from_biz(biz)
 
-    # msg_category=4/5 是"买家进入会话"通知，不含用户文字但含商品上下文
-    # 这类消息在 content 为空时也应该传递浏览足迹
     is_enter_session = int(msg_category) in (4, 5) or msg_type == 'system'
 
-    # 对进入会话消息，强制尝试所有可能的顶层字段路径
     if is_enter_session and not source_goods:
         for biz_key in ('push_biz_context', 'bizContext', 'biz_context', 'pushBizContext',
                         'context', 'msgContext'):
@@ -209,26 +171,13 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
                 if source_goods:
                     break
 
-    # 识别买家发送的拼多多商品链接
     if msg_type == 'text' and content and not source_goods:
         extracted = _extract_goods_from_url(content)
         if extracted:
             source_goods = extracted
             msg_type = 'goods'
-            order_info = {'goods_id': extracted['goods_id'], 'goods_name': extracted['goods_name']}
+            order_info = {'goods_id': extracted['goods_id'], 'goods_name': ''}
             content = f"[商品链接] {content}"
-
-    # 识别系统注入的"来自商品详情页"通知文字
-    from_goods_detail = False
-    if msg_type in ('text', 'goods', 'system') and content:
-        if any(marker in content for marker in _GOODS_DETAIL_PAGE_MARKERS):
-            is_enter_session = True
-            from_goods_detail = True
-            # 尝试从内容中提取商品链接（如有）
-            if not source_goods:
-                extracted = _extract_goods_from_url(content)
-                if extracted:
-                    source_goods = extracted
 
     if not buyer_id and not content and not is_enter_session:
         return None
@@ -243,10 +192,7 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
         'order_id': order_id,
         'order_info': order_info,
         'source_goods': source_goods,
-        'goods_url': (source_goods or {}).get('goods_url', ''),
         'is_enter_session': is_enter_session,
-        'from_goods_detail': from_goods_detail,
-        'source_page': 'goods_detail' if from_goods_detail else '',
         'timestamp': int(timestamp) if timestamp else 0,
     }
 
@@ -255,7 +201,6 @@ def _parse_content_obj(obj: dict, current_type: str) -> dict:
     """解析JSON格式的消息内容（商品卡片、订单卡片等）"""
     result = {'content': '', 'image_url': '', 'order_id': '', 'order_info': {}, 'msg_type': ''}
 
-    # 商品卡片
     if 'goodsId' in obj or 'goods_id' in obj or 'goodsName' in obj:
         goods_id = str(obj.get('goodsId') or obj.get('goods_id') or '')
         goods_name = str(obj.get('goodsName') or obj.get('goods_name') or obj.get('name') or '')
@@ -268,7 +213,6 @@ def _parse_content_obj(obj: dict, current_type: str) -> dict:
         result['order_info'] = {'goods_id': goods_id, 'goods_name': goods_name, 'price': price}
         return result
 
-    # 订单卡片
     if 'orderSn' in obj or 'order_sn' in obj or 'sn' in obj:
         order_sn = str(obj.get('orderSn') or obj.get('order_sn') or obj.get('sn') or '')
         goods_name = str(obj.get('goodsName') or obj.get('goods_name') or obj.get('skuName') or '')
@@ -283,7 +227,6 @@ def _parse_content_obj(obj: dict, current_type: str) -> dict:
         result['order_info'] = obj
         return result
 
-    # 图片消息
     if 'url' in obj or 'imageUrl' in obj or 'picUrl' in obj:
         url = obj.get('url') or obj.get('imageUrl') or obj.get('picUrl') or ''
         result['msg_type'] = 'image'
@@ -291,7 +234,6 @@ def _parse_content_obj(obj: dict, current_type: str) -> dict:
         result['content'] = '[图片]'
         return result
 
-    # 普通文本（JSON包装）
     text = obj.get('text') or obj.get('content') or obj.get('message') or ''
     if text:
         result['content'] = str(text)
@@ -301,7 +243,10 @@ def _parse_content_obj(obj: dict, current_type: str) -> dict:
 
 def _parse_old_format(body: dict) -> Optional[dict]:
     msg_type_code = body.get('msgType') or body.get('type') or 1
-    msg_type = MSG_TYPE_MAP.get(int(msg_type_code), 'text')
+    # 非数字字符串（如 'request'、'push' 等控制帧）直接忽略
+    if isinstance(msg_type_code, str) and msg_type_code.lower() in _NON_MSG_TYPES:
+        return None
+    msg_type = MSG_TYPE_MAP.get(int(msg_type_code) if str(msg_type_code).isdigit() else 0, 'text')
     from_user = body.get('fromUser') or body.get('senderId') or ''
     buyer_id = str(from_user) if from_user else ''
     buyer_name = body.get('fromNickname') or body.get('senderName') or body.get('nickName') or ''
@@ -328,28 +273,16 @@ def _parse_old_format(body: dict) -> Optional[dict]:
     elif msg_type == 'withdraw':
         content = '[消息已撤回]'
 
-    # 从biz上下文提取浏览足迹（旧格式消息）
     biz_old = body.get('push_biz_context') or body.get('bizContext') or {}
     source_goods = _extract_source_goods_from_biz(biz_old)
 
-    # 识别买家发送的拼多多商品链接
     if msg_type == 'text' and content and not source_goods:
         extracted = _extract_goods_from_url(content)
         if extracted:
             source_goods = extracted
             msg_type = 'goods'
-            order_info = {'goods_id': extracted['goods_id'], 'goods_name': extracted['goods_name']}
+            order_info = {'goods_id': extracted['goods_id'], 'goods_name': ''}
             content = f"[商品链接] {content}"
-
-    # 识别系统注入的"来自商品详情页"通知文字
-    from_goods_detail = False
-    if msg_type in ('text', 'goods', 'system') and content:
-        if any(marker in content for marker in _GOODS_DETAIL_PAGE_MARKERS):
-            from_goods_detail = True
-            if not source_goods:
-                extracted = _extract_goods_from_url(content)
-                if extracted:
-                    source_goods = extracted
 
     if not buyer_id and not content:
         return None
@@ -364,9 +297,6 @@ def _parse_old_format(body: dict) -> Optional[dict]:
         'order_id': order_id,
         'order_info': order_info,
         'source_goods': source_goods,
-        'goods_url': (source_goods or {}).get('goods_url', ''),
         'is_enter_session': False,
-        'from_goods_detail': from_goods_detail,
-        'source_page': 'goods_detail' if from_goods_detail else '',
         'timestamp': int(timestamp) if timestamp else 0,
     }
