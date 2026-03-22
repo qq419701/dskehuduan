@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 logger = logging.getLogger(__name__)
 PDD_LOGIN_URL = "https://mms.pinduoduo.com/"
 BROWSER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".aikefu-client", "browser_data")
-_LOGIN_COUNTDOWN_SECONDS = 15  # 登录成功后的倒计时秒数
+_LOGIN_COUNTDOWN_SECONDS = 30  # 登录成功后的倒计时秒数
 
 
 class PddLogin:
@@ -59,29 +59,55 @@ class PddLogin:
                 )
                 logger.info("店铺 %s 已通过登录页，当前URL: %s", self.shop_id, page.url)
 
-                # 注入15秒倒计时提示，让用户知道即将保存退出
-                await page.evaluate(f"""() => {{
+                # 注入30秒倒计时提示 + "立即保存并关闭"按钮
+                await page.evaluate("""() => {
                     const div = document.createElement('div');
                     div.id = '__aikefu_countdown__';
                     div.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);'
                         + 'background:rgba(0,0,0,0.82);color:#fff;padding:18px 40px;'
                         + 'border-radius:10px;font-size:18px;z-index:999999;text-align:center;'
-                        + 'box-shadow:0 4px 16px rgba(0,0,0,0.4);';
-                    div.innerHTML = '✅ 登录成功！{_LOGIN_COUNTDOWN_SECONDS} 秒后自动保存退出';
+                        + 'box-shadow:0 4px 16px rgba(0,0,0,0.4);min-width:340px;';
+                    div.innerHTML = `
+                        <div id="__aikefu_msg__">✅ 登录成功！30 秒后自动保存退出</div>
+                        <button id="__aikefu_save_btn__" style="
+                            margin-top:14px;padding:8px 28px;background:#27ae60;color:#fff;
+                            border:none;border-radius:6px;font-size:16px;cursor:pointer;
+                            box-shadow:0 2px 8px rgba(0,0,0,0.3);">
+                            💾 立即保存并关闭
+                        </button>`;
                     document.body.appendChild(div);
-                    let s = {_LOGIN_COUNTDOWN_SECONDS};
-                    const t = setInterval(() => {{
+                    window.__aikefu_save_now__ = false;
+                    document.getElementById('__aikefu_save_btn__').onclick = function() {
+                        window.__aikefu_save_now__ = true;
+                        document.getElementById('__aikefu_msg__').innerHTML = '💾 正在保存，请稍候...';
+                        document.getElementById('__aikefu_save_btn__').disabled = true;
+                    };
+                    let s = 30;
+                    const t = setInterval(() => {
                         s--;
-                        div.innerHTML = '✅ 登录成功！' + s + ' 秒后自动保存退出';
-                        if (s <= 0) {{
+                        if (!window.__aikefu_save_now__) {
+                            document.getElementById('__aikefu_msg__').innerHTML = '✅ 登录成功！' + s + ' 秒后自动保存退出';
+                        }
+                        if (s <= 0) {
                             clearInterval(t);
-                            div.innerHTML = '💾 正在保存，请稍候...';
-                        }}
-                    }}, 1000);
-                }}""")
+                            window.__aikefu_save_now__ = true;
+                            document.getElementById('__aikefu_msg__').innerHTML = '💾 正在保存，请稍候...';
+                        }
+                    }, 1000);
+                }""")
 
-                # 等待倒计时结束后保存退出
-                await asyncio.sleep(_LOGIN_COUNTDOWN_SECONDS)
+                # 轮询等待：用户手动点击"立即保存"或倒计时结束
+                elapsed = 0
+                while elapsed < _LOGIN_COUNTDOWN_SECONDS:
+                    await asyncio.sleep(0.5)
+                    elapsed += 0.5
+                    try:
+                        save_now = await page.evaluate("() => !!window.__aikefu_save_now__")
+                        if save_now:
+                            logger.info("店铺 %s 用户手动点击保存，提前结束等待", self.shop_id)
+                            break
+                    except Exception:
+                        break
                 logger.info("店铺 %s 登录信息已采集，立即保存", self.shop_id)
 
             except Exception as e:
