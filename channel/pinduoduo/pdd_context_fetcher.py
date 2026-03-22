@@ -17,13 +17,15 @@ logger = logging.getLogger(__name__)
 PDD_ORDER_LIST_URL = 'https://mms.pinduoduo.com/latitude/order/userAllOrder'
 # 备用订单接口（mangkhut 后台接口，兜底）
 PDD_ORDER_LIST_FALLBACK_URL = 'https://mms.pinduoduo.com/mangkhut/mms/recentOrderList'
+# 买家浏览足迹接口（主力）
+PDD_FOOTPRINT_URL = 'https://mms.pinduoduo.com/latitude/goods/singleRecommendGoods'
 
 class PddContextFetcher:
     """
-    主动通过 HTTP API 采集买家订单，补充到上下文管理器
+    主动通过 HTTP API 采集买家订单和浏览足迹，补充到上下文管理器
     采集方式：
     1. 通过 latitude/order/userAllOrder 接口，按 uid 过滤最近订单
-    2. 浏览足迹仅从WS缓存读取（latitude/goods/singleRecommendGoods 不支持按uid主动查询）
+    2. 浏览足迹通过 HTTP singleRecommendGoods 接口主动拉取，WS缓存作为兜底
     3. 结果更新到 BuyerContextManager
     """
 
@@ -144,20 +146,54 @@ class PddContextFetcher:
 
     async def fetch_buyer_footprint(self, buyer_id: str, conversation_id: str = '') -> Optional[dict]:
         """
-        获取买家浏览足迹（仅从WS缓存读取）
-        latitude/goods/singleRecommendGoods 不支持按uid主动查询，已废弃
+        通过 HTTP singleRecommendGoods 接口主动拉取买家浏览足迹。
+        优先取 result.headGoods，其次 result.goodsList[0]，HTTP 失败时兜底读取 WS 缓存。
         """
+        payload = {'type': 2, 'uid': str(buyer_id), 'pageNum': 1, 'pageSize': 10}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    PDD_FOOTPRINT_URL,
+                    json=payload,
+                    headers=self._build_headers(),
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200 and not self._is_redirected(str(resp.url)):
+                        try:
+                            data = await resp.json(content_type=None)
+                        except Exception as je:
+                            logger.debug('[fetcher] 买家 %s 浏览足迹响应解析JSON失败: %s', buyer_id, je)
+                            data = {}
+                        if data.get('success'):
+                            result = data.get('result') or {}
+                            goods_list = result.get('goodsList') or []
+                            goods = result.get('headGoods') or (goods_list[0] if goods_list else None)
+                            if goods and isinstance(goods, dict):
+                                footprint = {
+                                    'goods_id': str(goods.get('goodsId') or ''),
+                                    'goods_name': str(goods.get('goodsName') or ''),
+                                    'goods_img': str(goods.get('thumbUrl') or ''),
+                                    'goods_url': str(goods.get('goodsUrl') or ''),
+                                }
+                                if footprint['goods_id'] or footprint['goods_name']:
+                                    logger.debug('[fetcher] 买家 %s HTTP接口获取到浏览足迹: %s',
+                                                 buyer_id, footprint.get('goods_name', ''))
+                                    return footprint
+        except Exception as e:
+            logger.debug('[fetcher] 买家 %s 浏览足迹HTTP请求异常: %s', buyer_id, e)
+
+        # 兜底：从 WS 缓存读取
         try:
             ctx_dict = self.context_manager.get_context(str(self.shop_id), str(buyer_id))
             ws_goods = ctx_dict.get('current_goods')
             if ws_goods and (ws_goods.get('goods_id') or ws_goods.get('goods_name')):
-                logger.debug('[fetcher] 买家 %s 从WS缓存获取到浏览足迹: %s',
+                logger.debug('[fetcher] 买家 %s 从WS缓存兜底获取浏览足迹: %s',
                              buyer_id, ws_goods.get('goods_name', ''))
                 return ws_goods
         except Exception:
             pass
 
-        logger.debug('[fetcher] 买家 %s WS缓存无浏览足迹数据', buyer_id)
+        logger.debug('[fetcher] 买家 %s 未获取到浏览足迹数据', buyer_id)
         return None
 
     async def fetch_buyer_orders(self, buyer_id: str) -> list:
