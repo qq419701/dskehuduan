@@ -163,9 +163,8 @@ class PddContextFetcher:
         except Exception:
             pass
 
-        logger.debug('[fetcher] 买家 %s 浏览足迹仅从WS缓存读取（HTTP接口不支持按uid主动查询）', buyer_id)
-
         # 主动调用 HTTP 接口（type=1/2/3依次尝试）
+        redirected = False
         for fp_type in (1, 2, 3):
             payload = {
                 'type': fp_type,
@@ -184,7 +183,9 @@ class PddContextFetcher:
                     ) as resp:
                         final_url = str(resp.url)
                         if self._is_redirected(final_url):
-                            logger.warning('[fetcher] 浏览足迹接口被重定向（session过期）: %s', final_url)
+                            if not redirected:
+                                logger.warning('[fetcher] 浏览足迹接口被重定向（session过期）: %s', final_url)
+                                redirected = True
                             return None
                         if resp.status != 200:
                             continue
@@ -273,7 +274,7 @@ class PddContextFetcher:
                                     logger.warning('[fetcher] 买家 %s latitude接口返回success但订单列表为空！'
                                                    'result完整结构: %s',
                                                    buyer_id,
-                                                   json.dumps(result, ensure_ascii=False, indent=2)[:500] if isinstance(result, dict) else str(result)[:200])
+                                                   json.dumps(result, ensure_ascii=False, indent=2)[:500] if isinstance(result, dict) else repr(result)[:200])
                                     logger.debug('[fetcher] 买家 %s latitude接口返回success但解析订单为空，result结构: %s',
                                                  buyer_id, list(result.keys()) if isinstance(result, dict) else type(result).__name__)
                             else:

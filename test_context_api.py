@@ -444,7 +444,8 @@ def print_diagnosis(buyer_id: str, results: dict):
 
     if best_type is not None and best_type != DEFAULT_FOOTPRINT_TYPE:
         recommendations.append(
-            f"pdd_context_fetcher.py 中足迹接口 type 参数应优先使用 {best_type}（当前默认用2）"
+            f"浏览足迹接口 type={best_type} 效果最好，"
+            f"pdd_context_fetcher.py 已支持 type=1/2/3 依次尝试，无需手动修改"
         )
     elif best_type is None:
         recommendations.append("所有 type 值均未返回商品，可能是买家当前没有浏览记录，或 cookies 失效")
