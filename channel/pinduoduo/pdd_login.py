@@ -5,14 +5,7 @@ from playwright.async_api import async_playwright
 logger = logging.getLogger(__name__)
 PDD_LOGIN_URL = "https://mms.pinduoduo.com/"
 BROWSER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".aikefu-client", "browser_data")
-
-
-# 拼多多商家后台业务页面 URL 列表（访问这些页面会触发 PDDAccessToken 写入）
-_PDD_BUSINESS_PAGES = [
-    "https://mms.pinduoduo.com/mms/index.html",
-    "https://mms.pinduoduo.com/chat-merchant/index.html",
-    "https://mms.pinduoduo.com/home",
-]
+_LOGIN_COUNTDOWN_SECONDS = 15  # 登录成功后的倒计时秒数
 
 
 class PddLogin:
@@ -36,47 +29,6 @@ class PddLogin:
             logger.info("已清空店铺 %s 浏览器缓存", self.shop_id)
         os.makedirs(d, exist_ok=True)
 
-    async def _wait_for_pdd_access_token(self, ctx, page) -> bool:
-        """
-        等待 PDDAccessToken 被写入。
-        先快速轮询5秒，若没有则依次访问商家后台页面触发写入，最终再轮询5秒。
-        返回 True 表示成功获取到 PDDAccessToken。
-        """
-        # 第一轮：快速轮询5秒
-        for i in range(5):
-            raw = await ctx.cookies()
-            if any(c["name"] == "PDDAccessToken" for c in raw):
-                logger.info("店铺 %s PDDAccessToken 已写入（第%d秒）", self.shop_id, i + 1)
-                return True
-            await asyncio.sleep(1)
-
-        logger.warning("店铺 %s PDDAccessToken 未出现，尝试主动访问商家后台页面...", self.shop_id)
-
-        # 依次访问商家后台页面，触发 PDDAccessToken 写入
-        for biz_url in _PDD_BUSINESS_PAGES:
-            try:
-                logger.info("店铺 %s 访问: %s", self.shop_id, biz_url)
-                await page.goto(biz_url, wait_until="domcontentloaded", timeout=20000)
-                await asyncio.sleep(2)
-                raw = await ctx.cookies()
-                if any(c["name"] == "PDDAccessToken" for c in raw):
-                    logger.info("店铺 %s PDDAccessToken 已写入（访问 %s 后）", self.shop_id, biz_url)
-                    return True
-            except Exception as nav_e:
-                logger.warning("店铺 %s 访问 %s 时异常（忽略）: %s", self.shop_id, biz_url, nav_e)
-
-        # 最后再等5秒
-        logger.warning("店铺 %s 仍未获取到 PDDAccessToken，再等5秒...", self.shop_id)
-        for i in range(5):
-            raw = await ctx.cookies()
-            if any(c["name"] == "PDDAccessToken" for c in raw):
-                logger.info("店铺 %s PDDAccessToken 最终写入（第%d秒）", self.shop_id, i + 1)
-                return True
-            await asyncio.sleep(1)
-
-        logger.error("店铺 %s PDDAccessToken 始终未出现！保存现有 cookies（功能可能受限）", self.shop_id)
-        return False
-
     async def login(self, username="", password=""):
         user_data_dir = self.get_user_data_dir()
         logger.info("店铺 %s(%s) 开始登录流程", self.shop_id, self.shop_name)
@@ -95,7 +47,7 @@ class PddLogin:
             logger.info("请在弹出的浏览器中登录【%s】的拼多多账号（最多等5分钟）", self.shop_name)
 
             try:
-                # ── 第一步：等待通过登录页（URL 不再含 login/verify/captcha）──
+                # 等待通过登录页（URL 不再含 login/verify/captcha）
                 await page.wait_for_function(
                     """() => {
                         const url = window.location.href;
@@ -107,9 +59,29 @@ class PddLogin:
                 )
                 logger.info("店铺 %s 已通过登录页，当前URL: %s", self.shop_id, page.url)
 
-                # ── 第二步：等待 PDDAccessToken 写入 ──
-                await self._wait_for_pdd_access_token(ctx, page)
+                # 注入15秒倒计时提示，让用户知道即将保存退出
+                await page.evaluate(f"""() => {{
+                    const div = document.createElement('div');
+                    div.id = '__aikefu_countdown__';
+                    div.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);'
+                        + 'background:rgba(0,0,0,0.82);color:#fff;padding:18px 40px;'
+                        + 'border-radius:10px;font-size:18px;z-index:999999;text-align:center;'
+                        + 'box-shadow:0 4px 16px rgba(0,0,0,0.4);';
+                    div.innerHTML = '✅ 登录成功！{_LOGIN_COUNTDOWN_SECONDS} 秒后自动保存退出';
+                    document.body.appendChild(div);
+                    let s = {_LOGIN_COUNTDOWN_SECONDS};
+                    const t = setInterval(() => {{
+                        s--;
+                        div.innerHTML = '✅ 登录成功！' + s + ' 秒后自动保存退出';
+                        if (s <= 0) {{
+                            clearInterval(t);
+                            div.innerHTML = '💾 正在保存，请稍候...';
+                        }}
+                    }}, 1000);
+                }}""")
 
+                # 等待倒计时结束后保存退出
+                await asyncio.sleep(_LOGIN_COUNTDOWN_SECONDS)
                 logger.info("店铺 %s 登录信息已采集，立即保存", self.shop_id)
 
             except Exception as e:
