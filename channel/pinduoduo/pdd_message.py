@@ -14,32 +14,40 @@ logger = logging.getLogger(__name__)
 # 商品名称模板（当只有goods_id时使用，确保goods_name非空以便服务端能注入上下文）
 _GOODS_NAME_TEMPLATE = '商品(ID:{goods_id})'
 # 系统注入的"来自商品详情页"通知文字标识
-_GOODS_DETAIL_PAGE_MARKERS = ('当前用户来自 商品详情页', '来自商品详情页')
+_GOODS_DETAIL_PAGE_MARKERS = (
+    '当前用户来自 商品详情页', '来自商品详情页', '来自 商品详情页',
+    '[当前用户来自', 'from goods detail', 'source=goodsdetail',
+    '商品详情页进入',
+)
+# 宽泛 goods_id 参数匹配（[?&]goods_id=数字，在 & 前停止）
+_GOODS_ID_PARAM_RE = re.compile(r'[?&]goods_id=(\d+)')
+# 拼多多域名匹配前缀（统一维护）
+_PDD_DOMAIN_PREFIX = (
+    r'https?://(?:mobile\.yangkeduo\.com|mobile\.pinduoduo\.com|yangkeduo\.com'
+    r'|p\.pinduoduo\.com|yangkeduo\.com\.cn)'
+)
 
 def _extract_goods_from_url(text: str) -> Optional[dict]:
     """从拼多多商品URL提取goods_id，同时保留完整URL"""
     goods_id = None
     goods_url = ''
-    # 提取URL本身
-    url_pattern = (
-        r'https?://(?:mobile\.yangkeduo\.com|mobile\.pinduoduo\.com|yangkeduo\.com)'
-        r'/goods(?:\.html|/detail)[^\s]*'
-    )
-    url_m = re.search(url_pattern, text)
+    # 提取完整URL（保留原始链接含参数）
+    url_m = re.search(_PDD_DOMAIN_PREFIX + r'[^\s]*', text)
     if url_m:
         goods_url = url_m.group(0)
 
-    # 匹配 yangkeduo.com 或 mobile.pinduoduo.com 的商品链接并提取 goods_id
+    # 改进正则：支持 ?goods_id=xxx 和 &goods_id=xxx 两种形式，兼容 & 后有其他参数
     pattern = (
-        r'https?://(?:mobile\.yangkeduo\.com|mobile\.pinduoduo\.com|yangkeduo\.com)'
-        r'/goods(?:\.html|/detail)[^\s]*goods_id=(\d+)[^\s]*'
+        _PDD_DOMAIN_PREFIX
+        + r'(?:/goods(?:\.html|/detail|/share)[^\s]*?)?'
+        + r'[?&]goods_id=(\d+)'
     )
     m = re.search(pattern, text)
     if m:
         goods_id = m.group(1)
     elif 'yangkeduo' in text or 'pinduoduo' in text:
         # 宽泛匹配：只要 URL 含拼多多域名且包含 goods_id 参数
-        m2 = re.search(r'goods_id=(\d+)', text)
+        m2 = _GOODS_ID_PARAM_RE.search(text)
         if m2:
             goods_id = m2.group(1)
         if not goods_url:
@@ -238,6 +246,7 @@ def _parse_new_format(msg: dict) -> Optional[dict]:
         'goods_url': (source_goods or {}).get('goods_url', ''),
         'is_enter_session': is_enter_session,
         'from_goods_detail': from_goods_detail,
+        'source_page': 'goods_detail' if from_goods_detail else '',
         'timestamp': int(timestamp) if timestamp else 0,
     }
 
@@ -332,6 +341,16 @@ def _parse_old_format(body: dict) -> Optional[dict]:
             order_info = {'goods_id': extracted['goods_id'], 'goods_name': extracted['goods_name']}
             content = f"[商品链接] {content}"
 
+    # 识别系统注入的"来自商品详情页"通知文字
+    from_goods_detail = False
+    if msg_type in ('text', 'goods', 'system') and content:
+        if any(marker in content for marker in _GOODS_DETAIL_PAGE_MARKERS):
+            from_goods_detail = True
+            if not source_goods:
+                extracted = _extract_goods_from_url(content)
+                if extracted:
+                    source_goods = extracted
+
     if not buyer_id and not content:
         return None
 
@@ -347,6 +366,7 @@ def _parse_old_format(body: dict) -> Optional[dict]:
         'source_goods': source_goods,
         'goods_url': (source_goods or {}).get('goods_url', ''),
         'is_enter_session': False,
-        'from_goods_detail': False,
+        'from_goods_detail': from_goods_detail,
+        'source_page': 'goods_detail' if from_goods_detail else '',
         'timestamp': int(timestamp) if timestamp else 0,
     }
