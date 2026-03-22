@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 logger = logging.getLogger(__name__)
 PDD_LOGIN_URL = "https://mms.pinduoduo.com/"
 BROWSER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".aikefu-client", "browser_data")
-_LOGIN_COUNTDOWN_SECONDS = 15  # 登录成功后的倒计时秒数
+_LOGIN_COUNTDOWN_SECONDS = 30  # 登录成功后的倒计时秒数
 
 
 class PddLogin:

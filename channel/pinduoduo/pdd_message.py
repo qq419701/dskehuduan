@@ -16,7 +16,8 @@ def _extract_goods_from_url(text: str) -> Optional[dict]:
     goods_id = None
     # 匹配 yangkeduo.com 或 mobile.pinduoduo.com 的商品链接
     pattern = (
-        r'https?://(?:mobile\.yangkeduo\.com|mobile\.pinduoduo\.com|yangkeduo\.com)\n        r'/goods(?:\.html|/detail)[^\s]*goods_id=(\d+)[^\s]*'
+        r'https?://(?:mobile\.yangkeduo\.com|mobile\.pinduoduo\.com|yangkeduo\.com)'
+        r'/goods(?:\.html|/detail)[^\s]*goods_id=(\d+)[^\s]*'
     )
     m = re.search(pattern, text)
     if m:
