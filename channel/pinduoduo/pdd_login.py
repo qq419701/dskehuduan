@@ -6,28 +6,6 @@ logger = logging.getLogger(__name__)
 PDD_LOGIN_URL = "https://mms.pinduoduo.com/"
 BROWSER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".aikefu-client", "browser_data")
 
-COUNTDOWN_JS = """(shopName) => {
-    if (document.getElementById('aikefu-tip')) return;
-    let seconds = 15;
-    const box = document.createElement('div');
-    box.id = 'aikefu-tip';
-    box.style.cssText = 'position:fixed;top:16px;right:16px;z-index:999999;background:#27ae60;color:#fff;padding:16px 22px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.3);font-size:15px;font-family:sans-serif;min-width:220px;text-align:center;';
-    box.innerHTML = `<div style="font-size:13px;margin-bottom:6px;">✅ 登录成功！</div>
-        <div style="font-size:13px;margin-bottom:10px;">正在保存【${shopName}】登录信息</div>
-        <div id="aikefu-count" style="font-size:36px;font-weight:bold;margin-bottom:10px;">${seconds}</div>
-        <div style="font-size:12px;margin-bottom:10px;">秒后自动保存关闭</div>
-        <button id="aikefu-close-btn" style="background:#fff;color:#27ae60;border:none;border-radius:5px;padding:6px 18px;font-size:13px;cursor:pointer;font-weight:bold;">立即保存并关闭</button>`;
-    document.body.appendChild(box);
-    window._aikefu_close = false;
-    document.getElementById('aikefu-close-btn').onclick = () => { window._aikefu_close = true; };
-    const timer = setInterval(() => {
-        seconds--;
-        const el = document.getElementById('aikefu-count');
-        if (el) el.textContent = seconds;
-        if (seconds <= 0) { clearInterval(timer); window._aikefu_close = true; }
-    }, 1000);
-}
-"""
 
 # 拼多多商家后台业务页面 URL 列表（访问这些页面会触发 PDDAccessToken 写入）
 _PDD_BUSINESS_PAGES = [
@@ -61,25 +39,25 @@ class PddLogin:
     async def _wait_for_pdd_access_token(self, ctx, page) -> bool:
         """
         等待 PDDAccessToken 被写入。
-        先轮询30秒，若没有则依次访问商家后台页面触发写入，最终再轮询30秒。
+        先快速轮询5秒，若没有则依次访问商家后台页面触发写入，最终再轮询5秒。
         返回 True 表示成功获取到 PDDAccessToken。
         """
-        # 第一轮：等30秒，可能页面自动跳转写入
-        for i in range(30):
+        # 第一轮：快速轮询5秒
+        for i in range(5):
             raw = await ctx.cookies()
             if any(c["name"] == "PDDAccessToken" for c in raw):
                 logger.info("店铺 %s PDDAccessToken 已写入（第%d秒）", self.shop_id, i + 1)
                 return True
             await asyncio.sleep(1)
 
-        logger.warning("店铺 %s 等待30秒后 PDDAccessToken 仍未出现，尝试主动访问商家后台页面...", self.shop_id)
+        logger.warning("店铺 %s PDDAccessToken 未出现，尝试主动访问商家后台页面...", self.shop_id)
 
         # 依次访问商家后台页面，触发 PDDAccessToken 写入
         for biz_url in _PDD_BUSINESS_PAGES:
             try:
                 logger.info("店铺 %s 访问: %s", self.shop_id, biz_url)
                 await page.goto(biz_url, wait_until="domcontentloaded", timeout=20000)
-                await asyncio.sleep(4)
+                await asyncio.sleep(2)
                 raw = await ctx.cookies()
                 if any(c["name"] == "PDDAccessToken" for c in raw):
                     logger.info("店铺 %s PDDAccessToken 已写入（访问 %s 后）", self.shop_id, biz_url)
@@ -87,9 +65,9 @@ class PddLogin:
             except Exception as nav_e:
                 logger.warning("店铺 %s 访问 %s 时异常（忽略）: %s", self.shop_id, biz_url, nav_e)
 
-        # 最后再等30秒
-        logger.warning("店铺 %s 仍未获取到 PDDAccessToken，再等30秒...", self.shop_id)
-        for i in range(30):
+        # 最后再等5秒
+        logger.warning("店铺 %s 仍未获取到 PDDAccessToken，再等5秒...", self.shop_id)
+        for i in range(5):
             raw = await ctx.cookies()
             if any(c["name"] == "PDDAccessToken" for c in raw):
                 logger.info("店铺 %s PDDAccessToken 最终写入（第%d秒）", self.shop_id, i + 1)
@@ -132,22 +110,7 @@ class PddLogin:
                 # ── 第二步：等待 PDDAccessToken 写入 ──
                 await self._wait_for_pdd_access_token(ctx, page)
 
-                # ── 第三步：显示倒计时悬浮框 ──
-                logger.info("店铺 %s 显示倒计时提示", self.shop_id)
-                try:
-                    await page.evaluate(COUNTDOWN_JS, self.shop_name)
-                except Exception:
-                    pass
-                # 等待用户点击关闭或倒计时结束（最多20秒）
-                for _ in range(20):
-                    await asyncio.sleep(1)
-                    try:
-                        done = await page.evaluate("() => window._aikefu_close === true")
-                        if done:
-                            break
-                    except Exception:
-                        break
-                logger.info("店铺 %s 倒计时结束，保存登录信息", self.shop_id)
+                logger.info("店铺 %s 登录信息已采集，立即保存", self.shop_id)
 
             except Exception as e:
                 logger.error("店铺 %s 等待超时: %s", self.shop_id, e)
