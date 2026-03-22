@@ -86,13 +86,17 @@ class ServerAPI:
         image_url: str = "",
         order_info: dict = None,
         current_goods: dict = None,
+        from_goods_detail: bool = False,
+        source_page: str = "",
     ) -> dict:
         """
         通过shop_token推送买家消息（客户端/插件通用接口）
         POST /api/webhook/pdd
         新增参数：
-          image_url     - 图片消息的URL
-          current_goods - 买家当前浏览的商品信息（含 goods_id、goods_name、goods_img）
+          image_url         - 图片消息的URL
+          current_goods     - 买家当前浏览的商品信息（含 goods_id、goods_name、goods_img）
+          from_goods_detail - 买家是否从商品详情页进入会话
+          source_page       - 买家进入会话的来源页面标识
         """
         payload = {
             "shop_token": shop_token,
@@ -108,6 +112,10 @@ class ServerAPI:
         # 有浏览足迹时才加入，避免兼容性问题
         if current_goods:
             payload["current_goods"] = current_goods
+        if from_goods_detail:
+            payload["from_goods_detail"] = from_goods_detail
+        if source_page:
+            payload["source_page"] = source_page
         try:
             resp = self.session.post(
                 f"{self.base_url}/api/webhook/pdd",
