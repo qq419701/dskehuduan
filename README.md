@@ -243,6 +243,58 @@ GET /api/health
 服务端消息管理页现在展示完整买卖双方对话（气泡视图）。
 客户端通过正常的 `/done` 接口上报任务完成即可，服务端会自动记录 `reply_to_buyer`。
 
+## 拼多多上下文采集接口
+
+客户端通过以下拼多多内部 HTTP 接口采集买家上下文，均使用 cookies 鉴权（无需开放 API）。
+
+### 1. 浏览足迹接口（主力）
+
+| 项目 | 说明 |
+|------|------|
+| URL | `https://mms.pinduoduo.com/latitude/goods/singleRecommendGoods` |
+| Method | POST JSON |
+| 鉴权 | Cookie（PDDAccessToken 等） |
+
+**请求参数：**
+```json
+{"type": 2, "uid": "<买家uid>", "pageNum": 1, "pageSize": 10}
+```
+
+**响应关键字段：**
+- `result.headGoods`：买家最近浏览的主商品（优先使用）
+- `result.goodsList`：买家浏览足迹列表（兜底使用第0条）
+- 每条商品包含：`goodsId`、`goodsName`、`thumbUrl`、`goodsUrl`
+
+### 2. 买家订单接口（首选）
+
+| 项目 | 说明 |
+|------|------|
+| URL | `https://mms.pinduoduo.com/latitude/order/userAllOrder` |
+| Method | POST JSON |
+
+**请求参数：**
+```json
+{"uid": "<买家uid>", "pageSize": 10, "pageNum": 1, "startTime": <时间戳>, "endTime": <时间戳>}
+```
+
+### 3. 买家订单接口（兜底）
+
+| 项目 | 说明 |
+|------|------|
+| URL | `https://mms.pinduoduo.com/mangkhut/mms/recentOrderList` |
+| Method | POST JSON |
+
+**请求参数：**
+```json
+{"buyerUid": "<买家uid>", "pageNumber": 1, "pageSize": 10, "orderType": 0, ...}
+```
+
+### 采集时机
+
+1. 买家发来第一条消息时立即触发（`fetch_and_update`）
+2. 每30秒冷却期，避免频繁请求
+3. 优先级：HTTP singleRecommendGoods > WS推送 biz_context > 链接提取
+
 ## 常见问题
 
 **Q: 登录失败？**
