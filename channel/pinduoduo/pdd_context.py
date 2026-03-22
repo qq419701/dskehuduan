@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 # 上下文过期时间（秒），超过此时间的缓存会被清理
 CONTEXT_TTL = 2 * 3600  # 2小时
 
+# HTTP采集浏览足迹不覆盖WS数据的保护时间（秒）
+FOOTPRINT_CACHE_TTL = 600  # 10分钟
+
 
 class BuyerContext:
     """单个买家的上下文数据"""
@@ -19,6 +22,9 @@ class BuyerContext:
         self.order_sn: str = ''           # 最近订单号
         self.order_info: dict = {}        # 最近订单详细信息
         self.current_goods: dict = {}     # 当前浏览的商品（浏览足迹）
+        self.from_goods_detail: bool = False   # 买家是否来自商品详情页
+        self.current_goods_url: str = ''       # 当前商品链接
+        self.current_goods_updated: float = 0  # 浏览足迹最后更新时间（0表示从未更新）
         self.last_updated: float = time.time()
 
     def is_expired(self) -> bool:
@@ -32,6 +38,8 @@ class BuyerContext:
             'order_sn': self.order_sn,
             'order_info': self.order_info,
             'current_goods': self.current_goods if self.current_goods else None,
+            'from_goods_detail': self.from_goods_detail,
+            'current_goods_url': self.current_goods_url,
         }
 
 
@@ -68,6 +76,10 @@ class BuyerContextManager:
         ctx = self._get_ctx(shop_id, buyer_id)
         msg_type = msg.get('msg_type', '')
 
+        # 记录"来自商品详情页"标志
+        if msg.get('from_goods_detail'):
+            ctx.from_goods_detail = True
+
         # 1. 订单卡片消息 → 更新订单上下文
         if msg_type == 'order':
             order_info = msg.get('order_info') or {}
@@ -92,6 +104,7 @@ class BuyerContextManager:
                 goods_name = goods_name or str(sg.get('goods_name') or sg.get('goodsName') or '')
                 goods_img = goods_img or str(sg.get('goods_img') or sg.get('goodsImg') or '')
                 goods_price = goods_price or sg.get('goods_price') or sg.get('goodsPrice') or 0
+            goods_url = msg.get('goods_url', '') or (sg.get('goods_url', '') if isinstance(sg, dict) else '')
             if goods_id or goods_name:
                 ctx.current_goods = {
                     'goods_id': goods_id,
@@ -99,6 +112,10 @@ class BuyerContextManager:
                     'goods_img': goods_img,
                     'goods_price': goods_price,
                 }
+                if goods_url:
+                    ctx.current_goods['goods_url'] = goods_url
+                    ctx.current_goods_url = goods_url
+                ctx.current_goods_updated = time.time()
                 logger.info('买家 %s 浏览足迹已更新（商品卡片）: %s %s', buyer_id, goods_id, goods_name)
 
         # 3. 兜底：任何消息类型，只要有 source_goods 字段就更新浏览足迹缓存
@@ -107,12 +124,17 @@ class BuyerContextManager:
             goods_id = str(source_goods.get('goods_id') or source_goods.get('goodsId') or '')
             goods_name = str(source_goods.get('goods_name') or source_goods.get('goodsName') or '')
             goods_img = str(source_goods.get('goods_img') or source_goods.get('goodsImg') or '')
+            goods_url = source_goods.get('goods_url', '') or msg.get('goods_url', '')
             if goods_id or goods_name:
                 ctx.current_goods = {
                     'goods_id': goods_id,
                     'goods_name': goods_name,
                     'goods_img': goods_img,
                 }
+                if goods_url:
+                    ctx.current_goods['goods_url'] = goods_url
+                    ctx.current_goods_url = goods_url
+                ctx.current_goods_updated = time.time()
                 logger.debug('买家 %s 浏览足迹已更新（source_goods兜底）: %s', buyer_id, goods_name)
 
     def update_from_http_orders(self, shop_id: str, buyer_id: str, orders: list):
@@ -172,17 +194,20 @@ class BuyerContextManager:
         return {}
 
     def update_footprint(self, shop_id: str, buyer_id: str, goods: dict):
-        """从HTTP接口采集的浏览足迹更新上下文（WS直接数据优先级更高，不覆盖已有数据）"""
+        """从HTTP接口采集的浏览足迹更新上下文（WS直接数据优先，但超过10分钟允许覆盖）"""
         ctx = self._get_ctx(shop_id, buyer_id)
-        # 已有 current_goods 时不覆盖（WS数据优先）
+        # 已有 current_goods 且10分钟内不覆盖（WS数据优先）
         if ctx.current_goods and (ctx.current_goods.get('goods_id') or ctx.current_goods.get('goods_name')):
-            return
+            age = time.time() - ctx.current_goods_updated
+            if age < FOOTPRINT_CACHE_TTL:
+                return
         if goods.get('goods_id') or goods.get('goods_name'):
             ctx.current_goods = {
                 'goods_id': str(goods.get('goods_id') or ''),
                 'goods_name': str(goods.get('goods_name') or ''),
                 'goods_img': str(goods.get('goods_img') or ''),
             }
+            ctx.current_goods_updated = time.time()
             logger.info('买家 %s 浏览足迹已更新（HTTP singleRecommendGoods）: %s',
                         buyer_id, goods.get('goods_name', ''))
 

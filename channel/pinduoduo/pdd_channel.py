@@ -125,12 +125,14 @@ class PddChannel(BaseChannel):
         if not content and parsed.get('msg_type','text') == 'text' and not is_enter_session and not source_goods:
             return
 
-        # 进入会话通知：仅更新上下文，不走消息处理流程
-        if is_enter_session and not content:
+        # 进入会话通知：更新上下文，系统注入消息不走AI回复流程
+        if is_enter_session:
+            self._ctx_manager.update_from_message(str(self.shop_id), str(buyer_id), parsed)
             if source_goods:
-                self._ctx_manager.update_from_message(str(self.shop_id), str(buyer_id), parsed)
                 logger.info('店铺 %s 买家 %s 浏览足迹已捕获: %s', self.shop_id, buyer_id, source_goods.get('goods_name',''))
-            return
+            # 无内容或系统注入文字（来自商品详情页通知）：不发给AI
+            if not content or parsed.get('from_goods_detail'):
+                return
 
         # 消息去重（用content+buyer_id+时间戳前缀）
         msg_id = parsed.get('msg_id','')
@@ -211,6 +213,9 @@ class PddChannel(BaseChannel):
                 'goods_name': str(source_goods.get('goods_name') or ''),
                 'goods_img': str(source_goods.get('goods_img') or ''),
             }
+            goods_url = source_goods.get('goods_url', '') or msg.get('goods_url', '')
+            if goods_url:
+                current_goods['goods_url'] = goods_url
         elif buyer_ctx.get('current_goods'):
             current_goods = buyer_ctx['current_goods']
         elif order_info:
@@ -221,13 +226,20 @@ class PddChannel(BaseChannel):
             if goods_name or goods_id:
                 current_goods = {'goods_id': goods_id, 'goods_name': goods_name, 'goods_img': goods_img}
 
+        # 补充 goods_url（从上下文缓存获取，如果 current_goods 中还没有）
+        if current_goods and not current_goods.get('goods_url'):
+            ctx_goods_url = buyer_ctx.get('current_goods_url', '')
+            if ctx_goods_url:
+                current_goods['goods_url'] = ctx_goods_url
+
         # 兜底：从消息文本内容中提取商品链接
         if not current_goods and content and msg_type == 'text':
             from channel.pinduoduo.pdd_message import _extract_goods_from_url
             extracted = _extract_goods_from_url(content)
             if extracted:
                 current_goods = extracted
-                logger.debug('买家 %s 从消息内容提取到商品链接: goods_id=%s', buyer_id, extracted.get('goods_id', ''))
+                logger.debug('买家 %s 从消息内容提取到商品链接: goods_id=%s url=%s',
+                             buyer_id, extracted.get('goods_id', ''), extracted.get('goods_url', ''))
 
         # 入库
         message_id = 0
@@ -280,6 +292,7 @@ class PddChannel(BaseChannel):
                         msg_type=msg_type, image_url=image_url,
                         current_goods=current_goods,
                         order_info=order_info if order_info else None,
+                        from_goods_detail=buyer_ctx.get('from_goods_detail', False),
                     )
                 )
             else:
@@ -291,6 +304,7 @@ class PddChannel(BaseChannel):
                         msg_type=msg_type, image_url=image_url,
                         current_goods=current_goods,
                         order_info=order_info if order_info else None,
+                        from_goods_detail=buyer_ctx.get('from_goods_detail', False),
                     )
                 )
         except Exception as e:
