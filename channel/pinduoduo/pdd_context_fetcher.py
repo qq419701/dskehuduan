@@ -17,16 +17,13 @@ logger = logging.getLogger(__name__)
 PDD_ORDER_LIST_URL = 'https://mms.pinduoduo.com/latitude/order/userAllOrder'
 # 备用订单接口（mangkhut 后台接口，兜底）
 PDD_ORDER_LIST_FALLBACK_URL = 'https://mms.pinduoduo.com/mangkhut/mms/recentOrderList'
-# 买家浏览足迹接口（去掉错误的 /leopard/api 前缀）
-PDD_RECOMMEND_GOODS_URL = 'https://mms.pinduoduo.com/latitude/goods/singleRecommendGoods'
-
 
 class PddContextFetcher:
     """
     主动通过 HTTP API 采集买家订单，补充到上下文管理器
     采集方式：
     1. 通过 latitude/order/userAllOrder 接口，按 uid 过滤最近订单
-    2. 通过 latitude/goods/singleRecommendGoods 接口获取浏览足迹
+    2. 浏览足迹仅从WS缓存读取（latitude/goods/singleRecommendGoods 不支持按uid主动查询）
     3. 结果更新到 BuyerContextManager
     """
 
@@ -147,12 +144,9 @@ class PddContextFetcher:
 
     async def fetch_buyer_footprint(self, buyer_id: str, conversation_id: str = '') -> Optional[dict]:
         """
-        获取买家浏览足迹
-        1. 先从WS缓存读取，如果有则直接返回
-        2. 主动调用 latitude/goods/singleRecommendGoods 接口（type=1/2/3 依次尝试）
-        3. 均无数据时返回 None
+        获取买家浏览足迹（仅从WS缓存读取）
+        latitude/goods/singleRecommendGoods 不支持按uid主动查询，已废弃
         """
-        # 先从WS缓存读取，如果有则直接返回
         try:
             ctx_dict = self.context_manager.get_context(str(self.shop_id), str(buyer_id))
             ws_goods = ctx_dict.get('current_goods')
@@ -163,72 +157,7 @@ class PddContextFetcher:
         except Exception:
             pass
 
-        # 主动调用 HTTP 接口（type=1/2/3依次尝试）
-        redirected = False
-        for fp_type in (1, 2, 3):
-            payload = {
-                'type': fp_type,
-                'uid': str(buyer_id),
-                'conversationId': conversation_id or '',
-                'pageSize': 5,
-                'pageNum': 1,
-            }
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        PDD_RECOMMEND_GOODS_URL,
-                        json=payload,
-                        headers=self._build_headers(),
-                        timeout=aiohttp.ClientTimeout(total=8),
-                    ) as resp:
-                        final_url = str(resp.url)
-                        if self._is_redirected(final_url):
-                            if not redirected:
-                                logger.warning('[fetcher] 浏览足迹接口被重定向（session过期）: %s', final_url)
-                                redirected = True
-                            return None
-                        if resp.status != 200:
-                            continue
-                        try:
-                            data = await resp.json(content_type=None)
-                        except Exception as e:
-                            logger.debug('[fetcher] 浏览足迹接口响应非JSON (type=%d): %s', fp_type, e)
-                            continue
-                if not data.get('success'):
-                    logger.debug('[fetcher] 买家 %s 浏览足迹接口 type=%d 返回failure', buyer_id, fp_type)
-                    continue
-                result = data.get('result') or data.get('data') or {}
-                # result 可能是列表（每个元素含 goodsList）
-                if isinstance(result, list):
-                    first = result[0] if result else {}
-                    result = first if isinstance(first, dict) else {}
-                goods_list = result.get('goodsList') or result.get('list') or []
-                if not goods_list:
-                    logger.debug('[fetcher] 买家 %s 浏览足迹 type=%d 商品列表为空，完整result: %s',
-                                 buyer_id, fp_type, str(result)[:300])
-                    continue
-                # 优先取有"历史浏览"标签的商品
-                target = None
-                for g in goods_list:
-                    tags = g.get('goodsTag') or {}
-                    for t in (tags.get('footprintTags') or []):
-                        if '浏览' in str(t.get('desc', '')):
-                            target = g
-                            break
-                    if target:
-                        break
-                target = target or goods_list[0]
-                goods_id = str(target.get('goodsId') or target.get('goods_id') or '')
-                goods_name = str(target.get('goodsName') or target.get('goods_name') or '')
-                goods_img = str(target.get('goodsImageUrl') or target.get('thumbUrl') or target.get('goods_img') or '')
-                if goods_id or goods_name:
-                    logger.info('[fetcher] 买家 %s 浏览足迹采集成功 (type=%d): %s (id=%s)',
-                                buyer_id, fp_type, goods_name, goods_id)
-                    return {'goods_id': goods_id, 'goods_name': goods_name, 'goods_img': goods_img}
-            except Exception as e:
-                logger.debug('[fetcher] 买家 %s 浏览足迹采集异常 (type=%d): %s', buyer_id, fp_type, e)
-
-        logger.debug('[fetcher] 买家 %s 所有浏览足迹方式均未获取到数据', buyer_id)
+        logger.debug('[fetcher] 买家 %s WS缓存无浏览足迹数据', buyer_id)
         return None
 
     async def fetch_buyer_orders(self, buyer_id: str) -> list:
